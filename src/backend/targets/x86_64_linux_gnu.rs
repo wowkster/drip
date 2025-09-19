@@ -60,7 +60,7 @@ impl CodeGenerator for CodeGeneratorX86_64LinuxGnu {
 
             ; static data
             section .data
-            
+
             ; utf-8 strings
             {2}
             "#
@@ -256,8 +256,11 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
 
                     match operator {
-                        UnaryOperatorKind::Deref => todo!(),
-                        UnaryOperatorKind::AddressOf => todo!(),
+                        UnaryOperatorKind::Deref => {
+                            assembler.emit(format!("mov {sized_reg}, [{sized_reg}]"));
+                            assembler.store_operand(*destination, X86FullRegister::Rax);
+                        }
+                        UnaryOperatorKind::AddressOf { .. } => todo!(),
                         UnaryOperatorKind::LogicalNot => {
                             assembler.emit("xor rcx, rcx"); // FIXME: necessary?
                             assembler.emit(format!("test {sized_reg}, {sized_reg}"));

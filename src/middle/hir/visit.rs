@@ -5,7 +5,7 @@ use super::{
     Identifier, Item, ItemKind, LetStatement, Literal, Module, OwnerNode, Path, PathSegment,
     Statement, StatementKind, Type, TypeKind,
 };
-use crate::middle::hir::StructField;
+use crate::middle::hir::{ArrayInitializer, StructField, StructInitializerField};
 
 pub trait Visitor: Sized {
     fn visit_item(&mut self, item: Rc<Item>) {
@@ -14,7 +14,7 @@ pub trait Visitor: Sized {
 
     fn visit_function_definition(
         &mut self,
-        name: &Identifier,
+        name: &Path,
         signature: &FunctionSignature,
         body: BodyId,
     ) {
@@ -39,6 +39,16 @@ pub trait Visitor: Sized {
 
     fn visit_type_alias(&mut self, name: &Identifier, ty: Rc<Type>) {
         walk_type_alias(self, name, ty)
+    }
+
+    fn visit_static(
+        &mut self,
+        _is_mutable: bool,
+        name: &Identifier,
+        ty: Rc<Type>,
+        initializer: Rc<Expression>,
+    ) {
+        walk_static(self, name, ty, initializer)
     }
 
     fn visit_identifier(&mut self, _identifier: &Identifier) {}
@@ -75,6 +85,10 @@ pub trait Visitor: Sized {
         walk_expression(self, expression)
     }
 
+    fn visit_struct_initializer_field(&mut self, field: Rc<StructInitializerField>) {
+        walk_struct_initializer_field(self, field)
+    }
+
     fn visit_literal(&mut self, _literal: &Literal) {}
 }
 
@@ -107,16 +121,22 @@ pub fn walk_item(visitor: &mut impl Visitor, item: Rc<Item>) {
         } => visitor.visit_function_definition(name, signature, *body),
         ItemKind::Struct { name, fields } => visitor.visit_struct_definition(name, fields.clone()),
         ItemKind::TypeAlias { name, ty } => visitor.visit_type_alias(name, ty.clone()),
+        ItemKind::Static {
+            is_mutable,
+            name,
+            ty,
+            initializer,
+        } => visitor.visit_static(*is_mutable, name, ty.clone(), initializer.clone()),
     }
 }
 
 pub fn walk_function_definition(
     visitor: &mut impl Visitor,
-    name: &Identifier,
+    name: &Path,
     signature: &FunctionSignature,
     body: BodyId,
 ) {
-    visitor.visit_identifier(name);
+    visitor.visit_path(name);
     visitor.visit_function_signature(signature);
     visitor.visit_body(body);
 }
@@ -159,6 +179,17 @@ pub fn walk_struct_field(visitor: &mut impl Visitor, field: Rc<StructField>) {
 pub fn walk_type_alias(visitor: &mut impl Visitor, name: &Identifier, ty: Rc<Type>) {
     visitor.visit_identifier(name);
     visitor.visit_type(ty);
+}
+
+pub fn walk_static(
+    visitor: &mut impl Visitor,
+    name: &Identifier,
+    ty: Rc<Type>,
+    initializer: Rc<Expression>,
+) {
+    visitor.visit_identifier(name);
+    visitor.visit_type(ty);
+    visitor.visit_expression(initializer);
 }
 
 pub fn walk_type(visitor: &mut impl Visitor, ty: Rc<Type>) {
@@ -237,11 +268,26 @@ pub fn walk_expression(visitor: &mut impl Visitor, expression: Rc<Expression>) {
     match &expression.kind {
         ExpressionKind::Literal(literal) => visitor.visit_literal(literal),
         ExpressionKind::Path(path) => visitor.visit_path(path),
-        ExpressionKind::Block(block) => visitor.visit_block(block.clone(), BlockContext::Scope),
+        ExpressionKind::This => {}
+        ExpressionKind::Array(array_initializer) => match array_initializer {
+            ArrayInitializer::Repeated { value, length: _ } => {
+                visitor.visit_expression(value.clone());
+            }
+            ArrayInitializer::Specific(expressions) => expressions
+                .iter()
+                .for_each(|e| visitor.visit_expression(e.clone())),
+        },
         ExpressionKind::Tuple(expressions) => expressions
             .iter()
             .for_each(|e| visitor.visit_expression(e.clone())),
-        ExpressionKind::FieldAccess { target, name } => {
+        ExpressionKind::Struct { name, fields } => {
+            visitor.visit_path(name);
+            fields
+                .iter()
+                .for_each(|f| visitor.visit_struct_initializer_field(f.clone()));
+        }
+        ExpressionKind::Block(block) => visitor.visit_block(block.clone(), BlockContext::Scope),
+        ExpressionKind::FieldAccess { target, name, is_method_call: _ } => {
             visitor.visit_expression(target.clone());
             visitor.visit_identifier(name);
         }
@@ -293,4 +339,12 @@ pub fn walk_expression(visitor: &mut impl Visitor, expression: Rc<Expression>) {
             }
         }
     }
+}
+
+pub fn walk_struct_initializer_field(
+    visitor: &mut impl Visitor,
+    field: Rc<StructInitializerField>,
+) {
+    visitor.visit_identifier(&field.name);
+    visitor.visit_expression(field.value.clone());
 }

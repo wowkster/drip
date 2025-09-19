@@ -166,6 +166,9 @@ pub enum Keyword {
     Return,
     Struct,
     Type,
+    Static,
+    #[strum(serialize = "self")]
+    This
 }
 
 /// Table of single char tokens (matched after longer sequences are checked for)
@@ -212,6 +215,14 @@ impl Span {
     pub fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
+
+    pub fn merge(first: Self, second: Self) -> Self {
+        assert!(first.start <= second.start);
+        assert!(first.start <= second.end);
+        assert!(first.end <= second.end);
+
+        Self::new(first.start, second.end)
+    }
 }
 
 impl<'source> Lexer<'source> {
@@ -251,6 +262,13 @@ impl<'source> Lexer<'source> {
 
         self.position - pos
     }
+    
+    #[track_caller]
+    fn consume_char(&mut self) -> char {
+        let c = self.chars.next().unwrap();
+        self.position += c.len_utf8();
+        c
+    }
 
     #[track_caller]
     fn report_fatal_error(&self, message: &str) -> ! {
@@ -258,7 +276,7 @@ impl<'source> Lexer<'source> {
         eprintln!("error backtrace: {}", Location::caller());
 
         eprintln!(
-            "Fatal error reported in Lexer ({}:{}:{}):",
+            "Fatal error reported in Lexer (at {}:{}:{}:",
             self.source.origin,
             self.line_number + 1,
             self.column() + 1
@@ -277,8 +295,7 @@ impl<'source> Lexer<'source> {
                 self.line_number += 1;
             }
 
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
         }
     }
 
@@ -288,8 +305,7 @@ impl<'source> Lexer<'source> {
                 break;
             }
 
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
         }
     }
 
@@ -297,8 +313,7 @@ impl<'source> Lexer<'source> {
         let start_position = self.position;
 
         // Consume first wrapper
-        assert!(self.chars.next().is_some());
-        self.position += 1;
+        self.consume_char();
 
         while let Some(c) = self.chars.peek().copied() {
             if c == '\n' {
@@ -308,13 +323,11 @@ impl<'source> Lexer<'source> {
             }
 
             // Consume chars within the wrapped literal
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
 
             // If we encountered an escape sequence, keep going
             if c == '\\' && self.chars.peek().is_some_and(|c| *c == wrapper) {
-                self.chars.next();
-                self.position += 1;
+                self.consume_char();
             }
 
             if c == wrapper {
@@ -338,8 +351,7 @@ impl<'source> Lexer<'source> {
     ) -> Token {
         let start_position = self.position;
 
-        assert_eq!(self.chars.next(), Some(prefix));
-        self.position += 1;
+        assert_eq!(self.consume_char(), prefix);
 
         self.read_wrapped_escapable(wrapper, kind);
 
@@ -358,8 +370,7 @@ impl<'source> Lexer<'source> {
                 break;
             }
 
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
         }
 
         let span = self.new_span(start_position);
@@ -394,8 +405,7 @@ impl<'source> Lexer<'source> {
                 break;
             }
 
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
         }
 
         Token {
@@ -407,16 +417,14 @@ impl<'source> Lexer<'source> {
     fn read_decimal_part(&mut self) -> Token {
         let start_position = self.position;
 
-        assert!(self.chars.next().is_some());
-        self.position += 1;
+        self.consume_char();
 
         while let Some(c) = self.chars.peek().copied() {
             if !c.is_ascii_digit() {
                 break;
             }
 
-            self.chars.next();
-            self.position += 1;
+            self.consume_char();
         }
 
         Token {
@@ -428,8 +436,7 @@ impl<'source> Lexer<'source> {
     fn read_single(&mut self, kind: TokenKind) -> Token {
         let start_position = self.position;
 
-        self.chars.next();
-        self.position += 1;
+        self.consume_char();
 
         Token {
             kind,
@@ -440,10 +447,8 @@ impl<'source> Lexer<'source> {
     fn read_double(&mut self, kind: TokenKind) -> Token {
         let start_position = self.position;
 
-        self.chars.next();
-        self.chars.next();
-
-        self.position += 2;
+        self.consume_char();
+        self.consume_char();
 
         Token {
             kind,
@@ -454,11 +459,9 @@ impl<'source> Lexer<'source> {
     fn read_triple(&mut self, kind: TokenKind) -> Token {
         let start_position = self.position;
 
-        self.chars.next();
-        self.chars.next();
-        self.chars.next();
-
-        self.position += 3;
+        self.consume_char();
+        self.consume_char();
+        self.consume_char();
 
         Token {
             kind,
@@ -483,6 +486,27 @@ impl<'source> Lexer<'source> {
         }
 
         self.peek_buffer.front().cloned()
+    }
+
+    pub fn peek_nth(&mut self, n: usize) -> Option<Token> {
+        if self.peek_buffer.len() > n {
+            return self.peek_buffer.get(n).cloned();
+        }
+
+        let mut peek_buffer = core::mem::take(&mut self.peek_buffer);
+
+        let delta = n - self.peek_buffer.len() + 1;
+
+        for _ in 0..delta {
+            if let Some(token) = self.next() {
+                peek_buffer.push_back(token);
+            } else {
+                break;
+            }
+        }
+
+        self.peek_buffer = peek_buffer;
+        self.peek_buffer.get(n).cloned()
     }
 
     pub fn next(&mut self) -> Option<Token> {

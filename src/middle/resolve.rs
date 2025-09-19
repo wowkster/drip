@@ -6,8 +6,7 @@ use super::{hir, primitive::PrimitiveKind};
 use crate::{
     frontend::{
         ast::{
-            self, Block, Expression, ExpressionKind, FunctionDefinition, FunctionParameter, Local,
-            Module, NodeId, Type, TypeKind,
+            self, Block, FunctionDefinition, FunctionParameter, Local, Module, NodeId,
             visit::{self, Visitor},
         },
         intern::InternedSymbol,
@@ -39,6 +38,9 @@ pub struct Resolver {
     global_value_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
     global_type_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
 
+    /// Maps methods on types to their definitions
+    global_method_scopes: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
+
     // Maps name references to definitions
     value_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
     type_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
@@ -47,7 +49,7 @@ pub struct Resolver {
 /// The result of resolving everything in a module
 #[derive(Debug)]
 pub struct ResolutionMap {
-    /// Maps the
+    /// Maps AST item node ids to their def ids
     pub node_to_def_id_map: BTreeMap<NodeId, hir::LocalDefId>,
     /// Maps the usage of value identifiers (variable names) to their point of
     /// original definition
@@ -64,11 +66,15 @@ impl<'ast> Resolver {
                     .iter()
                     .map(|p| (InternedSymbol::new(&p.to_string()), *p)),
             ),
-            builtin_functions: BTreeSet::from([InternedSymbol::new("print")]),
+            builtin_functions: BTreeSet::from([
+                InternedSymbol::new("print"),
+                InternedSymbol::new("exit"),
+            ]),
             next_def_id: hir::LocalDefId::new(0), // TODO: should this be reserved for the module itself?
             node_to_def_id_map: BTreeMap::new(),
             global_value_scope: BTreeMap::new(),
             global_type_scope: BTreeMap::new(),
+            global_method_scopes: BTreeMap::new(),
             value_name_resolutions: BTreeMap::new(),
             type_name_resolutions: BTreeMap::new(),
         }
@@ -146,6 +152,23 @@ impl<'ast> Resolver {
 
         owner_id
     }
+
+    pub fn create_method_definition(
+        &mut self,
+        node_id: ast::NodeId,
+        ty_name: InternedSymbol,
+        method_name: InternedSymbol,
+    ) {
+        let owner_id = self.next_def_id;
+        self.next_def_id.increment_by(1);
+
+        self.node_to_def_id_map.insert(node_id, owner_id);
+
+        self.global_method_scopes
+            .entry(ty_name)
+            .or_default()
+            .insert(method_name, owner_id);
+    }
 }
 
 struct DefinitionCollector<'res, 'ast> {
@@ -170,25 +193,62 @@ impl<'res, 'ast> DefinitionCollector<'res, 'ast> {
         // TODO: recover from this error and keep moving
         std::process::exit(1);
     }
+
+    fn report_illegal_function_name(&self, offending_span: Span) -> ! {
+        eprintln!(
+            "{}: function name `{}` is malformed at {}",
+            "error".red(),
+            self.module.source_file.value_of_span(offending_span),
+            self.module.source_file.format_span_position(offending_span)
+        );
+        self.module.source_file.highlight_span(offending_span);
+        // TODO: show where the original was defined
+        // TODO: recover from this error and keep moving
+        std::process::exit(1);
+    }
 }
 
 impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
     fn visit_item(&mut self, item: &'ast ast::Item) {
         match &item.kind {
             ast::ItemKind::FunctionDefinition(function) => {
-                if self
-                    .resolver
-                    .global_value_scope
-                    .contains_key(&function.signature.name.symbol)
-                {
-                    self.report_duplicate_definition(function.signature.name.span)
-                }
+                match function.signature.name.segments.as_slice() {
+                    // this is a normal function definition
+                    [name] => {
+                        if self.resolver.global_value_scope.contains_key(&name.symbol) {
+                            self.report_duplicate_definition(name.span)
+                        }
 
-                self.resolver.create_definition(
-                    item.id,
-                    function.signature.name.symbol,
-                    hir::DefinitionKind::Function,
-                );
+                        let def_id = self.resolver.create_definition(
+                            item.id,
+                            name.symbol,
+                            hir::DefinitionKind::Function,
+                        );
+
+                        self.resolver.value_name_resolutions.insert(
+                            name.id,
+                            hir::Resolution::Definition(hir::DefinitionKind::Function, def_id),
+                        );
+                    }
+                    // this is a method definition
+                    [ty_name, method_name] => {
+                        if self
+                            .resolver
+                            .global_method_scopes
+                            .get(&ty_name.symbol)
+                            .is_some_and(|ty_scope| ty_scope.contains_key(&method_name.symbol))
+                        {
+                            self.report_duplicate_definition(function.signature.name.span)
+                        }
+
+                        self.resolver.create_method_definition(
+                            item.id,
+                            ty_name.symbol,
+                            method_name.symbol,
+                        );
+                    }
+                    _ => self.report_illegal_function_name(function.signature.name.span),
+                }
             }
             ast::ItemKind::StructDefinition(struct_definition) => {
                 if self
@@ -218,6 +278,21 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
                     item.id,
                     type_alias.name.symbol,
                     hir::DefinitionKind::Alias,
+                );
+            }
+            ast::ItemKind::Static(static_) => {
+                if self
+                    .resolver
+                    .global_value_scope
+                    .contains_key(&static_.name.symbol)
+                {
+                    self.report_duplicate_definition(static_.name.span)
+                }
+
+                self.resolver.create_definition(
+                    item.id,
+                    static_.name.symbol,
+                    hir::DefinitionKind::Static,
                 );
             }
         }
@@ -305,7 +380,7 @@ impl<'res, 'ast> LateResolveVisitor<'res, 'ast> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Namespace {
+pub enum Namespace {
     Value,
     Type,
 }
@@ -314,6 +389,34 @@ impl<'res, 'ast> Visitor<'ast> for LateResolveVisitor<'res, 'ast> {
     /// Walk the function with a fresh scope to bind parameters in
     fn visit_function_definition(&mut self, function: &'ast FunctionDefinition) {
         assert!(self.value_scope_stack.inner.is_empty());
+
+        match function.signature.name.segments.as_slice() {
+            [ty_name, method_name] => {
+                let Some(ty_resolution) = self.resolve_symbol(ty_name.symbol, Namespace::Type)
+                else {
+                    self.report_unresolved(ty_name.span)
+                };
+
+                self.resolver
+                    .type_name_resolutions
+                    .insert(ty_name.id, ty_resolution);
+
+                let def_id = self
+                    .resolver
+                    .global_method_scopes
+                    .get(&ty_name.symbol)
+                    .and_then(|ty_scope| ty_scope.get(&method_name.symbol))
+                    .expect("missing def id for method");
+
+                let method_resolution =
+                    hir::Resolution::Definition(hir::DefinitionKind::Function, *def_id);
+
+                self.resolver
+                    .value_name_resolutions
+                    .insert(ty_name.id, method_resolution);
+            }
+            _ => {}
+        }
 
         self.value_scope_stack.push_shallow_scope();
         visit::walk_function_definition(self, function);
@@ -339,40 +442,12 @@ impl<'res, 'ast> Visitor<'ast> for LateResolveVisitor<'res, 'ast> {
         visit::walk_function_parameter(self, parameter);
     }
 
-    fn visit_type(&mut self, ty: &'ast Type) {
-        // FIXME: we could just visit qualified ident if it walker exposed which
-        // namespace it belongs to
+    fn visit_static(&mut self, static_: &'ast ast::Static) {
+        assert!(self.value_scope_stack.inner.is_empty());
 
-        if let TypeKind::QualifiedIdentifier(qualified_ident) = &ty.kind {
-            // There are 2 possibilities here:
-            //   1) The identifier only has one segment and must be a
-            //      primitive or local/imported custom type (alias, struct, enum,
-            //      etc.). This can be resolved by checking if it's a primitive
-            //      and then checking the global scope if that fails
-            //  2) The identifier has more than one segment and we must start
-            //      from the first and resolve from there
-
-            // Case 1
-            if let [ident] = qualified_ident.segments.as_slice() {
-                // Resolve from the global scope
-                let Some(resolution) = self.resolve_symbol(ident.symbol, Namespace::Type) else {
-                    self.report_unresolved(ident.span);
-                };
-
-                self.resolver
-                    .type_name_resolutions
-                    .insert(qualified_ident.id, resolution);
-                self.resolver
-                    .type_name_resolutions
-                    .insert(ident.id, resolution);
-            }
-            // Case 2
-            else {
-                todo!("Resolve type identifier by traversing qualified identifier segments")
-            }
-        }
-
-        visit::walk_type(self, ty);
+        self.value_scope_stack.push_shallow_scope();
+        visit::walk_static(self, static_);
+        self.value_scope_stack.pop_shallow_scope();
     }
 
     /// Creates a new scope and walks the block
@@ -403,37 +478,104 @@ impl<'res, 'ast> Visitor<'ast> for LateResolveVisitor<'res, 'ast> {
             .add_shallow_binding(local.name.symbol, hir::Resolution::Local(local.id));
     }
 
-    fn visit_expression(&mut self, expression: &'ast Expression) {
-        // FIXME: same as above in `visit_type`
+    fn visit_qualified_identifier(
+        &mut self,
+        qualified_ident: &'ast ast::QualifiedIdentifier,
+        namespace: Namespace,
+    ) {
+        match namespace {
+            Namespace::Value => {
+                // There are 2 possibilities here:
+                //   1) The ident has no qualifier and it refers to a local, function
+                //      parameter, or local/imported definition
+                //   2) The ident has a qualifier so we should start at the first segment
+                //      and resolve from there
 
-        if let ExpressionKind::QualifiedIdentifier(qualified_ident) = &expression.kind {
-            // There are 2 possibilities here:
-            //   1) The ident has no qualifier and it refers to a local, function
-            //      parameter, or local/imported definition
-            //   2) The ident has a qualifier so we should start at the first segment
-            //      and resolve from there
+                // Case 1
+                if let [ident] = qualified_ident.segments.as_slice() {
+                    // Resolve from the global scope
+                    let Some(resolution) = self.resolve_symbol(ident.symbol, Namespace::Value)
+                    else {
+                        self.report_unresolved(ident.span);
+                    };
 
-            // Case 1
-            if let [ident] = qualified_ident.segments.as_slice() {
-                // Resolve from the global scope
-                let Some(resolution) = self.resolve_symbol(ident.symbol, Namespace::Value) else {
-                    self.report_unresolved(ident.span);
-                };
+                    self.resolver
+                        .value_name_resolutions
+                        .insert(qualified_ident.id, resolution);
+                    self.resolver
+                        .value_name_resolutions
+                        .insert(ident.id, resolution);
+                }
+                // Case 2
+                else if let [first_ident, second_ident] = qualified_ident.segments.as_slice() {
+                    let Some(first_resolution) =
+                        self.resolve_symbol(first_ident.symbol, Namespace::Type)
+                    else {
+                        self.report_unresolved(first_ident.span);
+                    };
 
-                self.resolver
-                    .value_name_resolutions
-                    .insert(qualified_ident.id, resolution);
-                self.resolver
-                    .value_name_resolutions
-                    .insert(ident.id, resolution);
+                    self.resolver
+                        .type_name_resolutions
+                        .insert(first_ident.id, first_resolution);
+
+                    // FIXME: should this be moved into the type checker to handle type aliases?
+
+                    let Some(second_resolution) = self
+                        .resolver
+                        .global_method_scopes
+                        .get(&first_ident.symbol)
+                        .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
+                    else {
+                        self.report_unresolved(second_ident.span);
+                    };
+
+                    let res = hir::Resolution::Definition(
+                        hir::DefinitionKind::Function,
+                        *second_resolution,
+                    );
+
+                    self.resolver
+                        .value_name_resolutions
+                        .insert(second_ident.id, res);
+                    self.resolver
+                        .value_name_resolutions
+                        .insert(qualified_ident.id, res);
+                } else {
+                    todo!("resolve long paths")
+                }
             }
-            // Case 2
-            else {
-                todo!("Resolve value identifier by traversing qualified identifier segments")
+            Namespace::Type => {
+                // There are 2 possibilities here:
+                //   1) The identifier only has one segment and must be a
+                //      primitive or local/imported custom type (alias, struct, enum,
+                //      etc.). This can be resolved by checking if it's a primitive
+                //      and then checking the global scope if that fails
+                //  2) The identifier has more than one segment and we must start
+                //      from the first and resolve from there
+
+                // Case 1
+                if let [ident] = qualified_ident.segments.as_slice() {
+                    // Resolve from the global scope
+                    let Some(resolution) = self.resolve_symbol(ident.symbol, Namespace::Type)
+                    else {
+                        self.report_unresolved(ident.span);
+                    };
+
+                    self.resolver
+                        .type_name_resolutions
+                        .insert(qualified_ident.id, resolution);
+                    self.resolver
+                        .type_name_resolutions
+                        .insert(ident.id, resolution);
+                }
+                // Case 2
+                else {
+                    todo!("Resolve type identifier by traversing qualified identifier segments")
+                }
             }
         }
 
-        visit::walk_expression(self, expression);
+        visit::walk_qualified_identifier(self, qualified_ident);
     }
 }
 

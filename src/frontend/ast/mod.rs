@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use super::{SourceFile, intern::InternedSymbol};
 use crate::frontend::lexer::Span;
 
@@ -26,6 +28,7 @@ pub enum ItemKind {
     FunctionDefinition(Box<FunctionDefinition>),
     StructDefinition(Box<StructDefinition>),
     TypeAlias(Box<TypeAlias>),
+    Static(Box<Static>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,16 +50,23 @@ pub struct FunctionDefinition {
 pub struct FunctionSignature {
     pub id: NodeId,
     pub span: Span,
-    pub name: Identifier,
+    pub name: QualifiedIdentifier,
     pub parameters: FunctionParameterList,
-    pub return_type: Option<Type>,
+    pub return_type: Option<Box<Type>>,
 }
 
 #[derive(Debug)]
 pub struct FunctionParameterList {
     pub id: NodeId,
     pub span: Span,
+    pub self_parameter: Option<SelfParameter>,
     pub parameters: Vec<FunctionParameter>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfParameter {
+    Owned,
+    Pointer { is_mutable: bool },
 }
 
 #[derive(Debug)]
@@ -64,7 +74,7 @@ pub struct FunctionParameter {
     pub id: NodeId,
     pub span: Span,
     pub name: Identifier,
-    pub ty: Type,
+    pub ty: Box<Type>,
 }
 
 #[derive(Debug)]
@@ -83,7 +93,7 @@ pub struct StructField {
     pub span: Span,
     pub visibility: Visibility,
     pub name: Identifier,
-    pub ty: Type,
+    pub ty: Box<Type>,
 }
 
 #[derive(Debug)]
@@ -92,7 +102,19 @@ pub struct TypeAlias {
     pub span: Span,
     pub visibility: Visibility,
     pub name: Identifier,
-    pub ty: Type,
+    pub ty: Box<Type>,
+}
+
+#[derive(Debug)]
+pub struct Static {
+    pub id: NodeId,
+    pub span: Span,
+    pub visibility: Visibility,
+    pub is_mutable: bool,
+    pub name: Identifier,
+    pub ty: Box<Type>,
+    /// must be a constant or simplify to a constant
+    pub initializer: Box<Expression>,
 }
 
 #[derive(Debug)]
@@ -126,6 +148,10 @@ impl QualifiedIdentifier {
             .last()
             .expect("QualifiedIdentifier should always have at least one segment")
     }
+
+    pub fn len(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.segments.len()).unwrap()
+    }
 }
 
 #[derive(Debug)]
@@ -133,6 +159,23 @@ pub struct Identifier {
     pub id: NodeId,
     pub span: Span,
     pub symbol: InternedSymbol,
+}
+
+#[derive(Debug)]
+pub enum ArrayInitializer {
+    Repeated {
+        value: Box<Expression>,
+        length: Box<Literal>,
+    },
+    Specific(Box<[Expression]>),
+}
+
+#[derive(Debug)]
+pub struct StructInitializerField {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: Identifier,
+    pub value: Box<Expression>,
 }
 
 #[derive(Debug)]
@@ -188,12 +231,20 @@ pub struct Expression {
 pub enum ExpressionKind {
     Literal(Box<Literal>),
     QualifiedIdentifier(Box<QualifiedIdentifier>),
+    /// local self reference
+    This,
     Grouping(Box<Expression>),
     Tuple(Box<[Expression]>),
+    Array(Box<ArrayInitializer>),
+    Struct {
+        name: QualifiedIdentifier,
+        fields: Box<[StructInitializerField]>,
+    },
     Block(Box<Block>),
     FieldAccess {
         target: Box<Expression>,
         name: Identifier,
+        is_method_call: bool,
     },
     FunctionCall {
         target: Box<Expression>,
@@ -331,18 +382,24 @@ pub struct UnaryOperator {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOperatorKind {
-    Deref,      // *
-    AddressOf,  // &
-    LogicalNot, // !
-    BitwiseNot, // ~
-    Negate,     // -
+    Deref,                          // *
+    AddressOf { is_mutable: bool }, // & | &mut
+    LogicalNot,                     // !
+    BitwiseNot,                     // ~
+    Negate,                         // -
 }
 
 impl core::fmt::Display for UnaryOperatorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Deref => write!(f, "*"),
-            Self::AddressOf => write!(f, "&"),
+            Self::AddressOf { is_mutable } => {
+                if *is_mutable {
+                    write!(f, "&mut")
+                } else {
+                    write!(f, "&")
+                }
+            }
             Self::LogicalNot => write!(f, "!"),
             Self::BitwiseNot => write!(f, "~"),
             Self::Negate => write!(f, "-"),

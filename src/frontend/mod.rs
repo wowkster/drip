@@ -42,8 +42,8 @@ impl SourceFile {
     pub fn row_for_position(&self, position: usize) -> usize {
         let mut row = 1;
 
-        for c in self.contents.chars().take(position) {
-            if c == '\n' {
+        for c in self.contents.bytes().take(position) {
+            if c == b'\n' {
                 row += 1;
             }
         }
@@ -54,8 +54,8 @@ impl SourceFile {
     pub fn column_for_position(&self, position: usize) -> usize {
         let mut col = 1;
 
-        for c in self.contents.chars().take(position) {
-            if c == '\n' {
+        for c in self.contents.bytes().take(position) {
+            if c == b'\n' {
                 col = 0;
             }
 

@@ -14,9 +14,10 @@ pub fn pretty_print_lir(function: &lir::FunctionDefinition) {
     print!(
         "{}",
         function
-            .arguments
+            .struct_return
             .iter()
-            .map(|arg| arg.to_string())
+            .map(|sret| format!("sret {}", sret.to_string()))
+            .chain(function.arguments.iter().map(|arg| arg.to_string()))
             .join(", ")
             .white()
     );
@@ -211,10 +212,12 @@ impl core::fmt::Display for lir::Immediate {
             lir::Immediate::Int(value, _) => write!(f, "{value}"),
             lir::Immediate::Float(value, _) => write!(f, "{value}"),
             lir::Immediate::Bool(value) => write!(f, "{value}"),
-            lir::Immediate::StaticLabel(value) => {
+            lir::Immediate::AnonymousStaticLabel(value) => {
                 write!(f, "__$static_alloc_{}", value.index())
             }
-            lir::Immediate::FunctionLabel(s) => write!(f, "{}", s.value()),
+            lir::Immediate::NamedStaticLabel(s) | lir::Immediate::FunctionLabel(s) => {
+                write!(f, "{}", s.value())
+            }
         }
     }
 }

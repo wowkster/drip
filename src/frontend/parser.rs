@@ -7,11 +7,12 @@ use super::{
 use crate::frontend::{
     SourceFile,
     ast::{
-        AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block, Expression,
-        ExpressionKind, FunctionCallArgumentList, FunctionDefinition, FunctionParameter,
-        FunctionParameterList, FunctionSignature, Identifier, Literal, LiteralKind, Local,
-        LocalKind, Module, QualifiedIdentifier, Statement, StatementKind, StructDefinition,
-        StructField, Type, TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind, Visibility,
+        ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
+        Expression, ExpressionKind, FunctionCallArgumentList, FunctionDefinition,
+        FunctionParameter, FunctionParameterList, FunctionSignature, Identifier, Literal,
+        LiteralKind, Local, LocalKind, Module, QualifiedIdentifier, SelfParameter, Statement,
+        StatementKind, Static, StructDefinition, StructField, StructInitializerField, Type,
+        TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind, Visibility,
     },
     lexer::{Keyword, Lexer, Span, Token, TokenKind},
 };
@@ -67,10 +68,10 @@ impl<'source> Parser<'source> {
         eprintln!("error backtrace: {}", Location::caller());
 
         eprintln!(
-            "Fatal error reported in Parser ({}:{}:{}):",
+            "Fatal error reported in Parser at {}:{}:{}:",
             self.lexer.source().origin,
             self.lexer.line_number() + 1,
-            self.lexer.column()
+            self.lexer.column() + 1
         );
         eprintln!("{message}");
         std::process::exit(1);
@@ -80,6 +81,22 @@ impl<'source> Parser<'source> {
         let Some(token) = self.lexer.peek() else {
             self.report_fatal_error_old(&format!("Expected {expecting} but reached end of file",))
         };
+
+        token
+    }
+
+    #[track_caller]
+    fn expect_peek_to_be(&mut self, kind: TokenKind) -> Token {
+        let token = self.expect_peek(&format!("{kind:?}"));
+
+        if token.kind != kind {
+            self.report_fatal_error_old(&format!(
+                "Expected {:?} but found {:?} ({})",
+                kind,
+                token.kind,
+                self.lexer.source().value_of_span(token.span)
+            ))
+        }
 
         token
     }
@@ -145,6 +162,15 @@ impl<'source> Parser<'source> {
                     kind: ItemKind::TypeAlias(type_alias),
                 }
             }
+            TokenKind::Keyword(Keyword::Static) => {
+                let static_ = Box::new(self.parse_static());
+
+                Item {
+                    id: self.create_node_id(),
+                    span: static_.span,
+                    kind: ItemKind::Static(static_),
+                }
+            }
             _ => self.report_fatal_error_old(&format!(
                 "Expected function definition in module but found: {} ({:?})",
                 self.lexer.source().value_of_span(peeked.span),
@@ -171,7 +197,7 @@ impl<'source> Parser<'source> {
 
     /// name(param: ty) -> return_type
     fn parse_function_signature(&mut self) -> FunctionSignature {
-        let name = self.parse_identifier();
+        let name = self.parse_qualified_identifier();
         let parameters = self.parse_function_parameter_list();
 
         let return_type = (self.expect_peek("arrow or opening brace").kind == TokenKind::Arrow)
@@ -193,12 +219,14 @@ impl<'source> Parser<'source> {
             span,
             name,
             parameters,
-            return_type,
+            return_type: return_type.map(Box::new),
         }
     }
 
     // (argc: usize, argv: &[str])
+    // (*self, argc: usize, argv: &[str])
     fn parse_function_parameter_list(&mut self) -> FunctionParameterList {
+        let mut self_parameter = None;
         let mut parameters = Vec::new();
 
         let open_paren = self.expect_next_to_be(TokenKind::OpenParen);
@@ -206,18 +234,50 @@ impl<'source> Parser<'source> {
         // If the next token is not a closing paren, try parsing function
         // parameters
         if self.expect_peek("function parameter or closing paren").kind != TokenKind::CloseParen {
-            // If a close paren was not found then there MUST be at least one
-            // parameter
-            parameters.push(self.parse_function_parameter());
+            let next = self.expect_peek("identifier or self parameter");
 
-            // While the next token is a comma try and parse more parameters
-            while self
-                .lexer
-                .peek()
-                .is_some_and(|t| t.kind == TokenKind::Comma)
+            if next.kind == TokenKind::Keyword(Keyword::This) {
+                self_parameter = Some(SelfParameter::Owned)
+            } else if next.kind == TokenKind::Asterisk {
+                self.expect_next_to_be(TokenKind::Asterisk);
+
+                let is_mutable = if self.expect_peek("mut keyword or self keyword").kind
+                    == TokenKind::Keyword(Keyword::Mut)
+                {
+                    self.expect_keyword(Keyword::Mut);
+                    true
+                } else {
+                    false
+                };
+
+                self.expect_keyword(Keyword::This);
+
+                self_parameter = Some(SelfParameter::Pointer { is_mutable })
+            }
+
+            if self_parameter.is_some()
+                && self.expect_peek("comma or closing paren").kind != TokenKind::CloseParen
             {
                 self.expect_next_to_be(TokenKind::Comma);
+            }
+
+            // FIXME: change this to the same way struct literals are parsed
+
+            if self.expect_peek("function parameter or closing paren").kind != TokenKind::CloseParen
+            {
+                // If a close paren was not found then there MUST be at least one
+                // parameter
                 parameters.push(self.parse_function_parameter());
+
+                // While the next token is a comma try and parse more parameters
+                while self
+                    .lexer
+                    .peek()
+                    .is_some_and(|t| t.kind == TokenKind::Comma)
+                {
+                    self.expect_next_to_be(TokenKind::Comma);
+                    parameters.push(self.parse_function_parameter());
+                }
             }
         }
 
@@ -226,6 +286,7 @@ impl<'source> Parser<'source> {
         FunctionParameterList {
             id: self.create_node_id(),
             span: Span::new(open_paren.span.start, close_paren.span.end),
+            self_parameter,
             parameters,
         }
     }
@@ -240,12 +301,12 @@ impl<'source> Parser<'source> {
             id: self.create_node_id(),
             span: Span::new(name.span.start, ty.span.end),
             name,
-            ty,
+            ty: Box::new(ty),
         }
     }
 
     fn parse_struct_definition(&mut self) -> StructDefinition {
-        let strcut_keyword = self.expect_keyword(Keyword::Struct);
+        let struct_keyword = self.expect_keyword(Keyword::Struct);
         let name = self.parse_identifier();
 
         let mut fields = Vec::new();
@@ -280,7 +341,7 @@ impl<'source> Parser<'source> {
 
         StructDefinition {
             id: self.create_node_id(),
-            span: Span::new(strcut_keyword.span.start, closing_brace.span.end),
+            span: Span::new(struct_keyword.span.start, closing_brace.span.end),
             visibility: Visibility::Private,
             name,
             fields,
@@ -298,7 +359,7 @@ impl<'source> Parser<'source> {
             span: Span::new(name.span.start, ty.span.end),
             visibility: Visibility::Private,
             name,
-            ty,
+            ty: Box::new(ty),
         }
     }
 
@@ -315,7 +376,38 @@ impl<'source> Parser<'source> {
             span: Span::new(type_keyword.span.start, semi.span.end),
             visibility: Visibility::Private,
             name,
-            ty,
+            ty: Box::new(ty),
+        }
+    }
+
+    // static mut A: i32 = 0;
+    fn parse_static(&mut self) -> Static {
+        let static_keyword = self.expect_keyword(Keyword::Static);
+
+        let is_mutable = if self.expect_peek("mut keyword or identifier").kind
+            == TokenKind::Keyword(Keyword::Mut)
+        {
+            self.expect_keyword(Keyword::Mut);
+            true
+        } else {
+            false
+        };
+
+        let name = self.parse_identifier();
+        self.expect_next_to_be(TokenKind::Colon);
+        let ty = self.parse_type();
+        self.expect_next_to_be(TokenKind::Equals);
+        let initializer = self.parse_expression();
+        let semi = self.expect_next_to_be(TokenKind::Semicolon);
+
+        Static {
+            id: self.create_node_id(),
+            span: Span::new(static_keyword.span.start, semi.span.end),
+            visibility: Visibility::Private,
+            is_mutable,
+            name,
+            ty: Box::new(ty),
+            initializer: Box::new(initializer),
         }
     }
 
@@ -356,7 +448,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    // type = "*" ( "any" | type )
+    // type = "*" ( "mut" )? ( "any" | type )
     //        | "[" type ( ";" INTEGER )?  "]"
     //        | "(" type ( "," type )*  ")"
     //        | "fn" "(" ( type ( "," type )* )? ( "," "..." "[" type "]" ) ")" ( "->" type )?
@@ -371,7 +463,15 @@ impl<'source> Parser<'source> {
         {
             let asterisk = self.expect_next_to_be(TokenKind::Asterisk);
 
-            let maybe_any = self.expect_peek("open bracket or identifier");
+            let maybe_mut_or_any = self.expect_peek("open bracket, keyword, or identifier");
+
+            let maybe_any = if maybe_mut_or_any.kind == TokenKind::Keyword(Keyword::Mut) {
+                let _mut = self.expect_next_to_be(TokenKind::Keyword(Keyword::Mut));
+
+                self.expect_peek("open bracket, or identifier")
+            } else {
+                maybe_mut_or_any
+            };
 
             if maybe_any.kind == TokenKind::Identifier
                 && self.lexer.source().value_of_span(maybe_any.span) == "any"
@@ -408,10 +508,10 @@ impl<'source> Parser<'source> {
                 self.expect_next_to_be(TokenKind::Semicolon);
                 let length = self.parse_literal();
 
-                if length.kind != LiteralKind::Integer {
-                    // TODO: allow constant expressions
-                    self.report_fatal_error(length.span, "Array length must be an integer literal")
-                }
+                // if length.kind != LiteralKind::Integer {
+                //     // TODO: allow constant expressions
+                //     self.report_fatal_error(length.span, "Array length must be an integer literal")
+                // }
 
                 let close_bracket = self.expect_next_to_be(TokenKind::CloseBracket);
 
@@ -662,8 +762,11 @@ impl<'source> Parser<'source> {
     ///                   | "if" expression BLOCK ( "else" expression )?
     ///                   | "while" expression BLOCK
     ///                   | atom
-    /// atom           -> IDENTIFIER | NUMBER | STRING | BOOL
+    /// atom           -> IDENTIFIER ( "{" ( ( IDENTIFIER ":" expression ) ( "," IDENTIFIER ":" expression )* )?  "}")?
+    ///                   | NUMBER | STRING | BOOL
     ///                   | "(" expression ( "," expression )* ")"
+    ///                   | "[" ( expression ( "," expression )* ( "," )? )? "]"
+    ///                   | "[" expression ";" NUMBER "]"
     fn parse_expression(&mut self) -> Expression {
         // We start from the top and work our way down.
 
@@ -1030,6 +1133,15 @@ impl<'source> Parser<'source> {
     fn parse_factor_expression(&mut self) -> Expression {
         let mut expression = self.parse_cast_expression();
 
+        if self.expect_peek("factor operator or expression").kind == TokenKind::Asterisk
+            && matches!(
+                &expression.kind,
+                ExpressionKind::If { .. } | ExpressionKind::While { .. } | ExpressionKind::Block(_)
+            )
+        {
+            return expression;
+        }
+
         while self
             .expect_peek("factor operator or expression")
             .kind
@@ -1094,6 +1206,7 @@ impl<'source> Parser<'source> {
             .is_unary_operator()
         {
             let operator = self.parse_unary_operator();
+
             let operand = self.parse_unary_expression();
 
             return Expression {
@@ -1112,17 +1225,30 @@ impl<'source> Parser<'source> {
     fn parse_unary_operator(&mut self) -> UnaryOperator {
         let operator = self.expect_next("unary operator");
 
+        let kind = match operator.kind {
+            TokenKind::Asterisk => UnaryOperatorKind::Deref,
+            TokenKind::Ampersand => {
+                let is_mutable = if self.expect_peek("mut keyword or expression").kind
+                    == TokenKind::Keyword(Keyword::Mut)
+                {
+                    self.expect_keyword(Keyword::Mut);
+                    true
+                } else {
+                    false
+                };
+
+                UnaryOperatorKind::AddressOf { is_mutable }
+            }
+            TokenKind::Bang => UnaryOperatorKind::LogicalNot,
+            TokenKind::Tilde => UnaryOperatorKind::BitwiseNot,
+            TokenKind::Minus => UnaryOperatorKind::Negate,
+            _ => unreachable!("Unexpected unary operator"),
+        };
+
         UnaryOperator {
             id: self.create_node_id(),
             span: operator.span,
-            kind: match operator.kind {
-                TokenKind::Asterisk => UnaryOperatorKind::Deref,
-                TokenKind::Ampersand => UnaryOperatorKind::AddressOf,
-                TokenKind::Bang => UnaryOperatorKind::LogicalNot,
-                TokenKind::Tilde => UnaryOperatorKind::BitwiseNot,
-                TokenKind::Minus => UnaryOperatorKind::Negate,
-                _ => unreachable!("Unexpected unary operator"),
-            },
+            kind,
         }
     }
 
@@ -1135,6 +1261,10 @@ impl<'source> Parser<'source> {
             == TokenKind::OpenParen
         {
             let arguments = self.parse_function_call_arguments();
+
+            if let ExpressionKind::FieldAccess { is_method_call, .. } = &mut expression.kind {
+                *is_method_call = true;
+            }
 
             expression = Expression {
                 id: self.create_node_id(),
@@ -1202,6 +1332,7 @@ impl<'source> Parser<'source> {
                 kind: ExpressionKind::FieldAccess {
                     target: Box::new(expression),
                     name,
+                    is_method_call: false,
                 },
             }
         }
@@ -1313,11 +1444,26 @@ impl<'source> Parser<'source> {
     fn parse_atomic_expression(&mut self) -> Expression {
         // Check for qualified identifier
         if self
-            .expect_peek("qualified identifier, open paren, or literal expression")
+            .expect_peek("qualified identifier, open paren, open bracket, or literal expression")
             .kind
             == TokenKind::Identifier
         {
             let qualified_identifier = self.parse_qualified_identifier();
+
+            if self.lookahead_is_struct_initializer() {
+                self.expect_next_to_be(TokenKind::OpenBrace);
+                let fields = self.parse_struct_initializer_fields();
+                let close_brace = self.expect_next_to_be(TokenKind::CloseBrace);
+
+                return Expression {
+                    id: self.create_node_id(),
+                    span: Span::new(qualified_identifier.span.start, close_brace.span.end),
+                    kind: ExpressionKind::Struct {
+                        name: qualified_identifier,
+                        fields,
+                    },
+                };
+            }
 
             return Expression {
                 id: self.create_node_id(),
@@ -1327,8 +1473,31 @@ impl<'source> Parser<'source> {
         }
 
         // Check for grouping
-        if self.expect_peek("open paren, or literal expression").kind == TokenKind::OpenParen {
+        if self
+            .expect_peek("open paren, open bracket, or literal expression")
+            .kind
+            == TokenKind::OpenParen
+        {
             return self.parse_grouping_expression();
+        }
+
+        // Check for array literal
+        if self.expect_peek("open bracket or literal expression").kind == TokenKind::OpenBracket {
+            return self.parse_array_initializer_expression();
+        }
+
+        // check for local self
+
+        if self.expect_peek("self keyword or literal expression").kind
+            == TokenKind::Keyword(Keyword::This)
+        {
+            let self_keyword = self.expect_keyword(Keyword::This);
+
+            return Expression {
+                id: self.create_node_id(),
+                span: self_keyword.span,
+                kind: ExpressionKind::This,
+            };
         }
 
         // Assume it's a literal (no other valid options)
@@ -1341,6 +1510,40 @@ impl<'source> Parser<'source> {
         }
     }
 
+    fn lookahead_is_struct_initializer(&mut self) -> bool {
+        self.lexer
+            .peek_nth(0)
+            .filter(|t| t.kind == TokenKind::OpenBrace)
+            .and_then(|_| self.lexer.peek_nth(1))
+            .filter(|t| t.kind == TokenKind::Identifier)
+            .and_then(|_| self.lexer.peek_nth(2))
+            .filter(|t| t.kind == TokenKind::Colon)
+            .is_some()
+    }
+
+    fn parse_struct_initializer_fields(&mut self) -> Box<[StructInitializerField]> {
+        let mut fields = Vec::new();
+
+        while self.expect_peek("identifier or closing brace").kind == TokenKind::Identifier {
+            let name = self.parse_identifier();
+            self.expect_next_to_be(TokenKind::Colon);
+            let value = self.parse_expression();
+
+            if self.expect_peek("comma or closing brace").kind == TokenKind::Comma {
+                self.expect_next_to_be(TokenKind::Comma);
+            }
+
+            fields.push(StructInitializerField {
+                id: self.create_node_id(),
+                span: Span::merge(name.span, value.span),
+                name,
+                value: Box::new(value),
+            });
+        }
+
+        fields.into()
+    }
+
     fn parse_grouping_expression(&mut self) -> Expression {
         let open_paren = self.expect_next_to_be(TokenKind::OpenParen);
         let expression = self.parse_expression();
@@ -1348,6 +1551,8 @@ impl<'source> Parser<'source> {
         // Parse tuple
         if self.expect_peek("open paren, or literal expression").kind == TokenKind::Comma {
             let mut expressions = vec![expression];
+
+            // FIXME: parse using struct algorithm for trailing comma
 
             // While the next token is a comma try and parse more parameters
             while self
@@ -1374,6 +1579,76 @@ impl<'source> Parser<'source> {
             id: self.create_node_id(),
             span: Span::new(open_paren.span.start, close_paren.span.end),
             kind: ExpressionKind::Grouping(Box::new(expression)),
+        }
+    }
+
+    fn parse_array_initializer_expression(&mut self) -> Expression {
+        let open_bracket = self.expect_next_to_be(TokenKind::OpenBracket);
+
+        let array_initializer = if self.expect_peek("expression or close bracket").kind
+            == TokenKind::CloseBracket
+        {
+            ArrayInitializer::Specific(Box::new([]))
+        } else {
+            let first_expression = self.parse_expression();
+            let token = self.expect_peek("expression or close bracket");
+
+            match token.kind {
+                TokenKind::Semicolon => {
+                    let _semi = self.expect_next_to_be(TokenKind::Semicolon);
+                    let length = self.parse_literal();
+
+                    if length.kind != LiteralKind::Integer {
+                        // TODO: add this to accumulated error list since
+                        // this is trivially recoverable
+
+                        // TODO: allow constant expressions
+
+                        self.report_fatal_error(
+                            length.span,
+                            "Array length must be an integer literal",
+                        )
+                    }
+
+                    ArrayInitializer::Repeated {
+                        value: Box::new(first_expression),
+                        length: Box::new(length),
+                    }
+                }
+                TokenKind::CloseBracket => ArrayInitializer::Specific(Box::new([first_expression])),
+                TokenKind::Comma => {
+                    let mut values = vec![first_expression];
+
+                    self.expect_next_to_be(TokenKind::Comma);
+
+                    while self.expect_peek("expression or closing bracket").kind
+                        != TokenKind::CloseBracket
+                    {
+                        let value = self.parse_expression();
+
+                        if self.expect_peek("comma or closing brace").kind == TokenKind::Comma {
+                            self.expect_next_to_be(TokenKind::Comma);
+                        }
+
+                        values.push(value);
+                    }
+
+                    ArrayInitializer::Specific(values.into())
+                }
+                k => self.report_fatal_error_old(&format!(
+                    "Unexpected token in array literal {:?} ({})",
+                    k,
+                    self.lexer.source().value_of_span(token.span)
+                )),
+            }
+        };
+
+        let close_bracket = self.expect_next_to_be(TokenKind::CloseBracket);
+
+        Expression {
+            id: self.create_node_id(),
+            span: Span::new(open_bracket.span.start, close_bracket.span.end),
+            kind: ExpressionKind::Array(Box::new(array_initializer)),
         }
     }
 

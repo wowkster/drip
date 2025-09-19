@@ -3,15 +3,20 @@
 //! This involves indexing the AST and resolving all names within types and
 //! function bodies
 
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, panic::Location, rc::Rc};
+
+use colored::Colorize;
 
 use crate::{
-    frontend::{ast, lexer::Span},
+    frontend::{
+        ast::{self, SelfParameter},
+        lexer::Span,
+    },
     index::{Index, IndexVec},
     middle::{
         hir::{self, visit::Visitor},
         primitive::UIntKind,
-        resolve::{ResolutionMap, Resolver},
+        resolve::{Namespace, ResolutionMap, Resolver},
     },
 };
 
@@ -62,7 +67,55 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
     fn lower_item(&mut self, item: &'ast ast::Item) -> Rc<hir::Item> {
         let kind = match &item.kind {
             ast::ItemKind::FunctionDefinition(f) => {
-                let name = self.lower_ident(&f.signature.name);
+                let mut name_segments = Vec::new();
+
+                match f.signature.name.segments.as_slice() {
+                    [identifier] => {
+                        let resolution = hir::Resolution::Definition(
+                            hir::DefinitionKind::Function,
+                            self.owner_id,
+                        );
+
+                        name_segments.push(Rc::new(hir::PathSegment {
+                            hir_id: self.next_id(),
+                            span: identifier.span,
+                            identifier: self.lower_ident(identifier),
+                            resolution: self.lower_resolution(&resolution),
+                        }));
+                    }
+                    [ty_name, method_name] => {
+                        let ty_resolution = self
+                            .resolver
+                            .type_name_resolutions
+                            .get(&ty_name.id)
+                            .expect("method type name had no resolution");
+
+                        name_segments.push(Rc::new(hir::PathSegment {
+                            hir_id: self.next_id(),
+                            span: ty_name.span,
+                            identifier: self.lower_ident(ty_name),
+                            resolution: self.lower_resolution(ty_resolution),
+                        }));
+
+                        let method_resolution = hir::Resolution::Definition(
+                            hir::DefinitionKind::Function,
+                            self.owner_id,
+                        );
+
+                        name_segments.push(Rc::new(hir::PathSegment {
+                            hir_id: self.next_id(),
+                            span: ty_name.span,
+                            identifier: self.lower_ident(method_name),
+                            resolution: self.lower_resolution(&method_resolution),
+                        }));
+                    }
+                    _ => unreachable!(),
+                }
+
+                let name = hir::Path {
+                    segments: name_segments.into(),
+                    span: f.signature.name.span,
+                };
                 let signature = self.lower_function_signature(&f.signature);
 
                 // NOTE: must lower parameters first to bind names
@@ -89,6 +142,18 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                 hir::ItemKind::TypeAlias { name, ty }
             }
+            ast::ItemKind::Static(static_) => {
+                let name = self.lower_ident(&static_.name);
+                let ty = self.lower_type(&static_.ty);
+                let initializer = self.lower_expression(&static_.initializer);
+
+                hir::ItemKind::Static {
+                    is_mutable: static_.is_mutable,
+                    name,
+                    ty,
+                    initializer,
+                }
+            }
         };
 
         Rc::new(hir::Item {
@@ -103,6 +168,12 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
         signature: &'ast ast::FunctionSignature,
     ) -> hir::FunctionSignature {
         hir::FunctionSignature {
+            self_parameter: signature.parameters.self_parameter.map(|sp| match sp {
+                ast::SelfParameter::Owned => hir::SelfParameter::Owned,
+                ast::SelfParameter::Pointer { is_mutable } => {
+                    hir::SelfParameter::Pointer { is_mutable }
+                }
+            }),
             parameters: self.lower_function_parameters_as_types(&signature.parameters),
             variadic_type: None, // TODO
             return_type: signature.return_type.as_ref().map(|ty| self.lower_type(ty)),
@@ -147,7 +218,9 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                         .resolver
                         .type_name_resolutions
                         .get(&identifier.id)
-                        .expect("type identifier had no resolution");
+                        .unwrap_or_else(|| {
+                            panic!("type identifier had no resolution: {identifier:#?}")
+                        });
 
                     segments.push(Rc::new(hir::PathSegment {
                         hir_id: self.next_id(),
@@ -336,42 +409,89 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
         (result.into(), expr)
     }
 
+    fn lower_qualified_identifier(
+        &mut self,
+        qualified_identifier: &'ast ast::QualifiedIdentifier,
+        namespace: Namespace,
+    ) -> hir::Path {
+        // There are 2 possibilities here:
+        //   1) The ident has no qualifier and it refers to a local, function
+        //      parameter, or local/imported definition
+        //   2) The ident has a qualifier so we should start at the first segment
+        //      and resolve from there
+
+        let mut segments = Vec::new();
+
+        match qualified_identifier.segments.as_slice() {
+            [identifier] => {
+                let map = match namespace {
+                    Namespace::Value => &self.resolver.value_name_resolutions,
+                    Namespace::Type => &self.resolver.type_name_resolutions,
+                };
+
+                let resolution = map
+                    .get(&identifier.id)
+                    .unwrap_or_else(|| panic!("identifier had no resolution: {identifier:#?}"));
+
+                segments.push(Rc::new(hir::PathSegment {
+                    hir_id: self.next_id(),
+                    span: identifier.span,
+                    identifier: self.lower_ident(identifier),
+                    resolution: self.lower_resolution(resolution),
+                }));
+            }
+            [ty_name, method_name] => {
+                let ty_resolution = self
+                    .resolver
+                    .type_name_resolutions
+                    .get(&ty_name.id)
+                    .unwrap_or_else(|| {
+                        self.report_bug(ty_name.span, "type name had no resolution")
+                    });
+
+                segments.push(Rc::new(hir::PathSegment {
+                    hir_id: self.next_id(),
+                    span: ty_name.span,
+                    identifier: self.lower_ident(ty_name),
+                    resolution: self.lower_resolution(ty_resolution),
+                }));
+
+                let map = match namespace {
+                    Namespace::Value => &self.resolver.value_name_resolutions,
+                    Namespace::Type => &self.resolver.type_name_resolutions,
+                };
+
+                let method_resolution = map.get(&method_name.id).unwrap_or_else(|| {
+                    self.report_bug(method_name.span, "method name had no resolution")
+                });
+
+                segments.push(Rc::new(hir::PathSegment {
+                    hir_id: self.next_id(),
+                    span: method_name.span,
+                    identifier: self.lower_ident(method_name),
+                    resolution: self.lower_resolution(method_resolution),
+                }));
+            }
+            _ => todo!("resolve identifier expressions with multiple segments"),
+        }
+
+        hir::Path {
+            segments: segments.into(),
+            span: qualified_identifier.span,
+        }
+    }
+
     fn lower_expression(&mut self, expression: &'ast ast::Expression) -> Rc<hir::Expression> {
         let kind = match &expression.kind {
             ast::ExpressionKind::Literal(literal) => {
                 hir::ExpressionKind::Literal(self.lower_literal(literal))
             }
             ast::ExpressionKind::QualifiedIdentifier(qualified_identifier) => {
-                // There are 2 possibilities here:
-                //   1) The ident has no qualifier and it refers to a local, function
-                //      parameter, or local/imported definition
-                //   2) The ident has a qualifier so we should start at the first segment
-                //      and resolve from there
-
-                let mut segments = Vec::new();
-
-                if let [identifier] = qualified_identifier.segments.as_slice() {
-                    let resolution = self
-                        .resolver
-                        .value_name_resolutions
-                        .get(&identifier.id)
-                        .expect("value identifier had no resolution");
-
-                    segments.push(Rc::new(hir::PathSegment {
-                        hir_id: self.next_id(),
-                        span: identifier.span,
-                        identifier: self.lower_ident(identifier),
-                        resolution: self.lower_resolution(resolution),
-                    }));
-                } else {
-                    todo!("resolve identifier expressions with multiple segments")
-                }
-
-                hir::ExpressionKind::Path(hir::Path {
-                    segments: segments.into(),
-                    span: qualified_identifier.span,
-                })
+                hir::ExpressionKind::Path(
+                    self.lower_qualified_identifier(qualified_identifier, Namespace::Value),
+                )
             }
+            ast::ExpressionKind::This => hir::ExpressionKind::This,
             ast::ExpressionKind::Grouping(expression) => return self.lower_expression(expression),
             ast::ExpressionKind::Tuple(expressions) => hir::ExpressionKind::Tuple(
                 expressions
@@ -379,12 +499,71 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     .map(|e| self.lower_expression(e))
                     .collect(),
             ),
+            ast::ExpressionKind::Array(array_initializer) => {
+                match array_initializer.as_ref() {
+                    ast::ArrayInitializer::Repeated { value, length } => {
+                        let value = self.lower_expression(value);
+                        let length = match length.kind {
+                            ast::LiteralKind::Integer => length
+                                .symbol
+                                .value()
+                                .parse()
+                                // TODO: handle errors here
+                                .expect("Failed to parse array length"),
+                            _ => {
+                                self.report_error(
+                                    length.span,
+                                    "Array length must be an integer literal",
+                                );
+                            }
+                        };
+
+                        hir::ExpressionKind::Array(hir::ArrayInitializer::Repeated {
+                            value,
+                            length,
+                        })
+                    }
+                    ast::ArrayInitializer::Specific(expressions) => {
+                        hir::ExpressionKind::Array(hir::ArrayInitializer::Specific(
+                            expressions
+                                .iter()
+                                .map(|e| self.lower_expression(e))
+                                .collect(),
+                        ))
+                    }
+                }
+            }
+            ast::ExpressionKind::Struct { name, fields } => {
+                let name = self.lower_qualified_identifier(name, Namespace::Type);
+
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        let name = self.lower_ident(&field.name);
+                        let value = self.lower_expression(&field.value);
+
+                        Rc::new(hir::StructInitializerField {
+                            hir_id: self.next_id(),
+                            name,
+                            value,
+                            span: field.span,
+                        })
+                    })
+                    .collect();
+
+                hir::ExpressionKind::Struct { name, fields }
+            }
             ast::ExpressionKind::Block(block) => {
                 hir::ExpressionKind::Block(self.lower_block(block))
             }
-            ast::ExpressionKind::FieldAccess { target, name } => hir::ExpressionKind::FieldAccess {
+            ast::ExpressionKind::FieldAccess {
+                target,
+                name,
+                is_method_call,
+            } => hir::ExpressionKind::FieldAccess {
                 target: self.lower_expression(target),
                 name: self.lower_ident(name),
+                is_method_call: *is_method_call,
             },
             ast::ExpressionKind::FunctionCall { target, arguments } => {
                 hir::ExpressionKind::FunctionCall {
@@ -514,6 +693,21 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             "{} (at {})",
             message,
             self.module.source_file.format_span_position(offending_span)
+        );
+        self.module.source_file.highlight_span(offending_span);
+        std::process::exit(1);
+    }
+
+    #[track_caller]
+    fn report_bug(&self, offending_span: Span, message: &str) -> ! {
+        #[cfg(feature = "error-backtrace")]
+        eprintln!("{} {}", "error backtrace:".cyan(), Location::caller());
+
+        eprintln!(
+            "{} {} (at {})",
+            "[==BUG==]".bold().red(),
+            message,
+            self.module.source_file.format_span_position(offending_span),
         );
         self.module.source_file.highlight_span(offending_span);
         std::process::exit(1);
@@ -760,6 +954,16 @@ impl hir::visit::Visitor for HirIndexer {
         self.insert(segment.hir_id, hir::Node::PathSegment(segment.clone()));
         self.with_parent(segment.hir_id, |this| {
             hir::visit::walk_path_segment(this, segment);
+        });
+    }
+
+    fn visit_struct_initializer_field(&mut self, field: Rc<hir::StructInitializerField>) {
+        self.insert(
+            field.hir_id,
+            hir::Node::StructInitializerField(field.clone()),
+        );
+        self.with_parent(field.hir_id, |this| {
+            hir::visit::walk_struct_initializer_field(this, field);
         });
     }
 }

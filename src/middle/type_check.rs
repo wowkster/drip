@@ -6,7 +6,7 @@
 //!      environment
 //!   2) type checking all the executable bodies in the HIR to make sure they
 //!      comply with our type system's rules
-//!   
+//!
 //! The first step is fairly strait-forward since its mostly get collecting
 //! information. The second step is more involved and can be further broken down
 //! into 2 more main steps:
@@ -21,7 +21,7 @@
 //! report any errors since the input source code has been fully validated. From
 //! there, the next step is to use the computed types to lower the HIR to LIR.
 
-use std::{cell::OnceCell, collections::BTreeMap, rc::Rc};
+use std::{cell::OnceCell, collections::BTreeMap, panic::Location, rc::Rc};
 
 use colored::Colorize;
 use hashbrown::{HashMap, HashSet};
@@ -39,6 +39,7 @@ use crate::{
     },
     index::Index,
     middle::{
+        hir::DefinitionKind,
         primitive::{FloatKind, IntKind},
         ty::{FloatVariableId, IntVariableId, StructField, Type, TypeKind, TypeVariable},
     },
@@ -168,10 +169,68 @@ impl<'hir> TypeContext<'hir> {
                         is_variadic: true,
                     })
                 }
-                _ => unreachable!(),
+                "exit" => {
+                    let ret_ty = self.get_primitive_type(PrimitiveKind::Never);
+                    let u8_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U8));
+
+                    self.intern_type(TypeKind::FunctionPointer {
+                        parameters: [u8_ty].into(),
+                        return_type: ret_ty,
+                        is_variadic: false,
+                    })
+                }
+                name => unreachable!("unknown intrinsic function `{name}`"),
             },
             r => unreachable!("encountered value resolution in type namespace: {r:?}"),
         }
+    }
+
+    fn compute_self_type(
+        &mut self,
+        name: &hir::Path,
+        signature: &hir::FunctionSignature,
+    ) -> Option<Type> {
+        let Some(self_parameter) = signature.self_parameter else {
+            return None;
+        };
+
+        let hir::Resolution::Definition(hir::DefinitionKind::Struct, implementor_id) =
+            &name.segments[0].resolution
+        else {
+            unreachable!()
+        };
+
+        let owned_ty = self.def_id_to_type_map[implementor_id].clone();
+
+        let self_ty = match self_parameter {
+            hir::SelfParameter::Owned => owned_ty,
+            hir::SelfParameter::Pointer { is_mutable: _ } => {
+                self.intern_type(TypeKind::Pointer(owned_ty))
+            }
+        };
+
+        Some(self_ty)
+    }
+
+    #[track_caller]
+    fn report_bug(&self, offending_span: Span, message: &str) -> ! {
+        eprintln!(
+            "{}: {} {}",
+            "bug".green(),
+            message,
+            format!(
+                "(at {})",
+                self.source_file.format_span_position(offending_span),
+            )
+            .white()
+        );
+
+        #[cfg(feature = "error-backtrace")]
+        eprintln!("{} {}", "backtrace:".cyan(), Location::caller());
+
+        self.source_file.highlight_span(offending_span);
+
+        std::process::exit(1);
     }
 
     fn report_error(&self, error: TypeError) {
@@ -214,14 +273,20 @@ impl<'hir> TypeContext<'hir> {
                 TypeBoundary::ExplicitReturn => format!(
                     "explicit return type {actual} does not match the function signature's return type {expected}"
                 ),
-                   TypeBoundary::ImplicitReturn => format!(
+                TypeBoundary::ImplicitReturn => format!(
                     "implicit return type {actual} does not match the function signature's return type {expected}"
+                ),
+                TypeBoundary::ArrayInitializer => format!(
+                 "array element type {actual} does not match the expected type {expected}"
+                ),
+                TypeBoundary::StructInitializer => format!(
+                 "field type {actual} does not match the expected type {expected}"
                 ),
                 TypeBoundary::FieldAccess
                 | TypeBoundary::FunctionCall
                 | TypeBoundary::Deref
                 | TypeBoundary::LogicalOp
-                | TypeBoundary::ArithmeticOp | TypeBoundary::LoopControlFlow  => {
+                | TypeBoundary::ArithmeticOp | TypeBoundary::LoopControlFlow | TypeBoundary::SelfExpression  => {
                     unreachable!("these are not used with type mismatch")
                 }
             },
@@ -271,6 +336,9 @@ impl<'hir> TypeContext<'hir> {
             TypeErrorKind::IllegalMutation => "cannot mutate immutable variable".to_string(),
             TypeErrorKind::InvalidAssignment => "invalid left-hand side of assignment".to_string(),
             TypeErrorKind::UnknownFieldAccess {target, name } => format!("field `{name}` does not exist on type {target}"),
+            TypeErrorKind::MissingStructField { name } => format!("missing field `{name}`"),
+            TypeErrorKind::ExtraStructField { name } => format!("unexpected field `{name}`"),
+            TypeErrorKind::IllegalSelfUsage => format!("`self` may only not be used in functions without a `self` parameter"),
         };
 
         eprintln!(
@@ -295,11 +363,21 @@ struct GlobalTypeEnvironmentIndexer<'tcx, 'hir> {
 }
 
 impl<'tcx, 'hir> GlobalTypeEnvironmentIndexer<'tcx, 'hir> {
-    fn compute_type_for_function_signature(&mut self, signature: &hir::FunctionSignature) -> Type {
-        let parameters = signature
-            .parameters
-            .iter()
-            .map(|ty| self.type_context.compute_hir_type(ty.clone()))
+    fn compute_type_for_function_signature(
+        &mut self,
+        name: &hir::Path,
+        signature: &hir::FunctionSignature,
+    ) -> Type {
+        let self_ty = self.type_context.compute_self_type(name, signature);
+
+        let parameters = self_ty
+            .into_iter()
+            .chain(
+                signature
+                    .parameters
+                    .iter()
+                    .map(|ty| self.type_context.compute_hir_type(ty.clone())),
+            )
             .collect();
 
         let return_type = signature
@@ -319,8 +397,10 @@ impl<'tcx, 'hir> GlobalTypeEnvironmentIndexer<'tcx, 'hir> {
 impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir> {
     fn visit_item(&mut self, item: Rc<hir::Item>) {
         match &item.kind {
-            hir::ItemKind::Function { signature, .. } => {
-                let ty = self.compute_type_for_function_signature(signature);
+            hir::ItemKind::Function {
+                name, signature, ..
+            } => {
+                let ty = self.compute_type_for_function_signature(name, signature);
                 self.type_context
                     .def_id_to_type_map
                     .insert(item.owner_id, ty);
@@ -350,6 +430,17 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                     .def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
+            hir::ItemKind::Static {
+                is_mutable,
+                name,
+                ty,
+                initializer,
+            } => {
+                let ty = self.type_context.compute_hir_type(ty.clone());
+                self.type_context
+                    .def_id_to_type_map
+                    .insert(item.owner_id, ty);
+            }
         }
     }
 }
@@ -363,6 +454,9 @@ struct TypeChecker<'tcx, 'hir> {
     /// effectively the type environment Γ from type theory just without using
     /// the names directly (resolved during ast lowering)
     node_to_type_map: BTreeMap<hir::ItemLocalId, Type>,
+    /// Stores the method resolutions we computed for each field access
+    /// expression within a function call expression
+    method_resolution_map: BTreeMap<hir::ItemLocalId, hir::LocalDefId>,
 
     /// A list of accumulated constraints on the existing free type variables
     constraints: Vec<TypeConstraint>,
@@ -371,6 +465,7 @@ struct TypeChecker<'tcx, 'hir> {
 
     /// Keeps track of whether we are in a loop context (for break and continue)
     within_loop: bool,
+    self_type: OnceCell<Type>,
     return_type: OnceCell<Type>,
 
     next_integer_variable_id: IntVariableId,
@@ -408,7 +503,7 @@ enum TypeBoundary {
     FieldAccess,
     /// Function arguments must match the expected number
     FunctionCall,
-    /// Function argument type must match function paramter type
+    /// Function argument type must match function parameter type
     FunctionArgument,
     /// Cast operand must match target type
     Cast,
@@ -439,6 +534,13 @@ enum TypeBoundary {
     ExplicitReturn,
     /// Implicit return type must match function signature type
     ImplicitReturn,
+    /// All elements of an array initializer must be of the same type
+    ArrayInitializer,
+    /// All fields in a struct must be present, all fields must be of the
+    /// expected type, and there must not be any extra fields
+    StructInitializer,
+    /// Self expression is only valid in functions with a self parameter
+    SelfExpression,
 }
 
 impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
@@ -528,7 +630,7 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
 
     fn solve_constraints(&mut self) -> (SubstitutionMap, Vec<TypeError>) {
         let mut substitution_map = SubstitutionMap::new();
-        let mut defered_casts: Vec<TypeConstraint> = vec![];
+        let mut deferred_casts: Vec<TypeConstraint> = vec![];
         let mut errors = vec![];
 
         for constraint in core::mem::take(&mut self.constraints) {
@@ -546,14 +648,14 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
                         .solve_cast(from.clone(), to.clone(), &mut substitution_map, false)
                         .is_err()
                     {
-                        defered_casts.push(constraint);
+                        deferred_casts.push(constraint);
                     }
                 }
             }
         }
 
         // Do a second pass after we've done all our substitutions
-        for constraint in defered_casts {
+        for constraint in deferred_casts {
             let TypeConstraintKind::Cast { from, to } = constraint.kind else {
                 unreachable!()
             };
@@ -570,7 +672,7 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
     }
 
     /// Attempts to equate the provided types using our type system's inference
-    /// and coersion rules. For any recursive unifications, we only return the
+    /// and coercion rules. For any recursive unifications, we only return the
     /// top most error to provide the most context
     fn unify(
         &mut self,
@@ -591,13 +693,13 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
                 // cant figure out a nicer way to write this
                 let ty = self.type_context.intern_type(ty_kind.clone());
 
-                // This is where we define our inference coersion rules
-                let coercable = match variable {
+                // This is where we define our inference coercion rules
+                let coercible = match variable {
                     TypeVariable::Int(_) => ty_kind.is_integer_like(),
                     TypeVariable::Float(_) => ty_kind.is_float_like(),
                 };
 
-                if !coercable {
+                if !coercible {
                     return Err(TypeErrorKind::TypeMismatch {
                         expected: t1,
                         actual: t2,
@@ -691,6 +793,27 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
                 todo!("unify function pointer types")
             }
 
+            // Array pointers can be coerced to slices
+            (TypeKind::Slice(left), TypeKind::Pointer(right))
+                if matches!(&**right, TypeKind::Array { .. }) =>
+            {
+                let TypeKind::Array { ty: right, .. } = &**right else {
+                    unreachable!()
+                };
+
+                if self
+                    .unify(left.clone(), right.clone(), substitution_map)
+                    .is_err()
+                {
+                    return Err(TypeErrorKind::TypeMismatch {
+                        expected: t1,
+                        actual: t2,
+                    });
+                }
+
+                Ok(())
+            }
+
             // Any other type combination
             _ => Err(TypeErrorKind::TypeMismatch {
                 expected: t1,
@@ -723,14 +846,17 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
             // the target type if allowed for the variable kind and coersion is
             // enabled
             (TypeKind::Infer(variable), ty_kind) => {
-                let coercable = {
+                let coercible = {
                     match variable {
-                        TypeVariable::Int(_) => ty_kind.is_integer_like(),
+                        TypeVariable::Int(_) => {
+                            ty_kind.is_integer_like()
+                                | matches!(ty_kind, TypeKind::Pointer(_) | TypeKind::Any)
+                        }
                         TypeVariable::Float(_) => ty_kind.is_float_like(),
                     }
                 };
 
-                if coercable && coerce_type_variables {
+                if coercible && coerce_type_variables {
                     substitution_map.insert(*variable, to);
                     return Ok(());
                 }
@@ -748,8 +874,12 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
                 TypeKind::Integer(_) | TypeKind::UnsignedInteger(_) | TypeKind::Bool,
             ) => Ok(()),
             (TypeKind::Char, TypeKind::UnsignedInteger(UIntKind::U32)) => Ok(()),
+            // Allow casting properly sized integers to pointers
+            (TypeKind::UnsignedInteger(UIntKind::USize), TypeKind::Pointer(_) | TypeKind::Any) => {
+                Ok(())
+            }
             // Allow pointer type hacking
-            (TypeKind::Pointer(_), TypeKind::Pointer(_)) => Ok(()),
+            (TypeKind::Pointer(_) | TypeKind::Any, TypeKind::Pointer(_) | TypeKind::Any) => Ok(()),
             // Anything not explicitly allowed is an error
             _ => Err(TypeErrorKind::InvalidCast { from, to }),
         }
@@ -875,7 +1005,7 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
         // and then apply those computed recursive substitutions to all the
         // types in the node type map.
 
-        // Apply all the substitutions we calcualted to all the nodes in the type
+        // Apply all the substitutions we calculated to all the nodes in the type
         let mut node_types = core::mem::take(&mut self.node_to_type_map);
 
         for ty in node_types.values_mut() {
@@ -935,7 +1065,7 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
 
             assert!(
                 self.node_to_type_map.contains_key(&id),
-                "missing type for node {id:?} = {node:?}"
+                "missing type for node {id:#?} = {node:#?}"
             );
             assert!(
                 self.get_type(id).free_type_variables().is_empty(),
@@ -946,6 +1076,8 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
         Ok(TypeCheckResults {
             owner_id: self.owner_id,
             node_types: self.node_to_type_map,
+            method_resolutions: self.method_resolution_map,
+            self_type: self.self_type.get().cloned(),
         })
     }
 }
@@ -1024,6 +1156,12 @@ enum TypeErrorKind {
     InvalidAssignment,
     /// Accessed fields must exist
     UnknownFieldAccess { target: Type, name: InternedSymbol },
+    /// All struct fields must be present
+    MissingStructField { name: InternedSymbol },
+    /// No extra struct fields may be specified
+    ExtraStructField { name: InternedSymbol },
+    /// The "self" expression ay only be used in functions with a self parameter
+    IllegalSelfUsage,
 }
 
 impl TypeErrorKind {
@@ -1041,7 +1179,10 @@ impl TypeErrorKind {
             | TypeErrorKind::ArrayLengthMismatch { .. }
             | TypeErrorKind::IllegalMutation
             | TypeErrorKind::InvalidAssignment
-            | TypeErrorKind::UnknownFieldAccess { .. } => vec![],
+            | TypeErrorKind::UnknownFieldAccess { .. }
+            | TypeErrorKind::MissingStructField { .. }
+            | TypeErrorKind::ExtraStructField { .. }
+            | TypeErrorKind::IllegalSelfUsage => vec![],
         }
     }
 }
@@ -1065,10 +1206,18 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
     /// Bind the types for function parameters
     fn visit_function_definition(
         &mut self,
-        _name: &hir::Identifier,
+        name: &hir::Path,
         signature: &hir::FunctionSignature,
         body: hir::BodyId,
     ) {
+        hir::visit::walk_path(self, name);
+
+        // Collect self type
+
+        if let Some(self_ty) = self.type_context.compute_self_type(name, signature) {
+            self.self_type.set(self_ty).unwrap();
+        }
+
         // Collect parameter types
         hir::visit::walk_function_signature(self, signature);
 
@@ -1080,7 +1229,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
         };
         self.return_type.set(return_ty.clone()).unwrap();
 
-        // Assign types to function paramters
+        // Assign types to function parameters
         let body = self.type_context.module.get_body(body);
         for (name, ty) in body.params.iter().zip(signature.parameters.iter()) {
             self.copy_type_from(name.hir_id, ty.hir_id);
@@ -1239,6 +1388,12 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
         }
     }
 
+    fn visit_struct_initializer_field(&mut self, field: Rc<hir::StructInitializerField>) {
+        hir::visit::walk_struct_initializer_field(self, field.clone());
+
+        self.copy_type_from(field.hir_id, field.value.hir_id);
+    }
+
     fn visit_expression(&mut self, expression: Rc<hir::Expression>) {
         hir::visit::walk_expression(self, expression.clone());
 
@@ -1260,9 +1415,64 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 }
                 _ => unreachable!("encountered type resolution in value namespace"),
             },
-            hir::ExpressionKind::Block(block) => {
-                self.copy_type_from(expression.hir_id, block.hir_id);
+            hir::ExpressionKind::This => {
+                let Some(self_ty) = self.self_type.get() else {
+                    let err = self.type_context.get_error_type();
+                    self.insert_type(expression.hir_id, err);
+
+                    self.errors.push(TypeError {
+                        origin: TypeConstraintOrigin {
+                            span: expression.span,
+                            kind: TypeBoundary::SelfExpression,
+                        },
+                        kind: TypeErrorKind::IllegalSelfUsage,
+                    });
+                    return;
+                };
+
+                self.insert_type(expression.hir_id, self_ty.clone());
             }
+            hir::ExpressionKind::Array(array_initializer) => match array_initializer {
+                hir::ArrayInitializer::Repeated { value, length } => {
+                    let value_ty = self.get_type(value.hir_id);
+
+                    let ty = self.type_context.intern_type(TypeKind::Array {
+                        ty: value_ty,
+                        length: *length,
+                    });
+
+                    self.insert_type(expression.hir_id, ty);
+                }
+                hir::ArrayInitializer::Specific(expressions) => {
+                    let expression_tys: Rc<[Type]> = expressions
+                        .iter()
+                        .map(|e| self.get_type(e.hir_id))
+                        .collect();
+
+                    let inner_ty = expression_tys
+                        .first()
+                        .expect("arrays must have at least one element for now")
+                        .clone();
+
+                    for (e, ty) in expressions.iter().zip(expression_tys.iter()).skip(1) {
+                        self.add_equality_constraint(
+                            inner_ty.clone(),
+                            ty.clone(),
+                            TypeConstraintOrigin {
+                                span: e.span,
+                                kind: TypeBoundary::ArrayInitializer,
+                            },
+                        );
+                    }
+
+                    let ty = self.type_context.intern_type(TypeKind::Array {
+                        ty: inner_ty,
+                        length: expression_tys.len(),
+                    });
+
+                    self.insert_type(expression.hir_id, ty);
+                }
+            },
             hir::ExpressionKind::Tuple(expressions) => {
                 let expression_tys = expressions
                     .iter()
@@ -1274,12 +1484,92 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
 
                 self.insert_type(expression.hir_id, ty);
             }
-            hir::ExpressionKind::FieldAccess { target, name } => {
+            hir::ExpressionKind::Struct {
+                name,
+                fields: actual_fields,
+            } => {
+                let ty = self
+                    .type_context
+                    .compute_hir_resolution_type(*name.resolution());
+
+                let TypeKind::Struct {
+                    fields: expected_fields,
+                    ..
+                } = &*ty
+                else {
+                    unreachable!()
+                };
+
+                let expected_field_set: HashSet<InternedSymbol> =
+                    HashSet::from_iter(expected_fields.iter().map(|f| f.name));
+                let actual_field_set: HashSet<InternedSymbol> =
+                    HashSet::from_iter(actual_fields.iter().map(|f| f.name.symbol));
+
+                let expected_field_map: HashMap<InternedSymbol, Type> =
+                    HashMap::from_iter(expected_fields.iter().map(|f| (f.name, f.ty.clone())));
+
+                // check no missing fields
+
+                for missing_field in expected_field_set.difference(&actual_field_set) {
+                    self.errors.push(TypeError {
+                        origin: TypeConstraintOrigin {
+                            span: expression.span,
+                            kind: TypeBoundary::StructInitializer,
+                        },
+                        kind: TypeErrorKind::MissingStructField {
+                            name: *missing_field,
+                        },
+                    });
+                }
+
+                // check no extra fields
+
+                for extra_field in actual_field_set.difference(&expected_field_set) {
+                    let field = actual_fields
+                        .iter()
+                        .find(|f| f.name.symbol == *extra_field)
+                        .unwrap();
+
+                    self.errors.push(TypeError {
+                        origin: TypeConstraintOrigin {
+                            span: field.span,
+                            kind: TypeBoundary::StructInitializer,
+                        },
+                        kind: TypeErrorKind::ExtraStructField { name: *extra_field },
+                    });
+                }
+
+                // check all fields are expected type
+
+                for field in actual_fields.iter() {
+                    let field_ty = self.get_type(field.hir_id);
+                    let expected_ty = expected_field_map.get(&field.name.symbol).unwrap().clone();
+
+                    self.add_equality_constraint(
+                        field_ty,
+                        expected_ty,
+                        TypeConstraintOrigin {
+                            span: field.span,
+                            kind: TypeBoundary::StructInitializer,
+                        },
+                    );
+                }
+
+                self.insert_type(expression.hir_id, ty);
+            }
+            hir::ExpressionKind::Block(block) => {
+                self.copy_type_from(expression.hir_id, block.hir_id);
+            }
+            hir::ExpressionKind::FieldAccess {
+                target,
+                name,
+                is_method_call,
+            } => {
                 let target_ty = self.get_type(target.hir_id);
 
                 match &*target_ty {
-                    TypeKind::Str => match name.symbol.value() {
-                        "ptr" => {
+                    TypeKind::Str => match (name.symbol.value(), *is_method_call) {
+                        ("ptr", false) => {
                             let u8_ty = self
                                 .type_context
                                 .get_primitive_type(PrimitiveKind::UInt(UIntKind::U8));
@@ -1287,7 +1577,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
 
                             self.insert_type(expression.hir_id, ty);
                         }
-                        "len" => {
+                        ("len", false) => {
                             let ty = self
                                 .type_context
                                 .get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
@@ -1310,15 +1600,121 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             });
                         }
                     },
-                    TypeKind::Pointer(_) => todo!(),
-                    TypeKind::Slice(_) => todo!(),
+                    TypeKind::Pointer(_) => self
+                        .type_context
+                        .report_bug(expression.span, "todo: pointer auto deref"),
+                    TypeKind::Slice(inner_ty) => match (name.symbol.value(), *is_method_call) {
+                        ("ptr", false) => {
+                            let ty = self
+                                .type_context
+                                .intern_type(TypeKind::Pointer(inner_ty.clone()));
+
+                            self.insert_type(expression.hir_id, ty);
+                        }
+                        ("len", false) => {
+                            let ty = self
+                                .type_context
+                                .get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
+
+                            self.insert_type(expression.hir_id, ty);
+                        }
+                        _ => {
+                            let err = self.type_context.get_error_type();
+                            self.insert_type(expression.hir_id, err);
+
+                            self.errors.push(TypeError {
+                                origin: TypeConstraintOrigin {
+                                    span: target.span,
+                                    kind: TypeBoundary::FieldAccess,
+                                },
+                                kind: TypeErrorKind::UnknownFieldAccess {
+                                    target: target_ty,
+                                    name: name.symbol,
+                                },
+                            });
+                        }
+                    },
                     TypeKind::Array { ty, length } => todo!(),
                     TypeKind::Tuple(items) => todo!(),
                     TypeKind::Struct {
                         def_id,
-                        name,
+                        name: _,
                         fields,
-                    } => todo!(),
+                    } => {
+                        if *is_method_call {
+                            let Some(resolution) = self
+                                .type_context
+                                .module
+                                .get_owners()
+                                .filter_map(|owner_id| {
+                                    self.type_context
+                                        .module
+                                        .get_owner(owner_id)
+                                        .node()
+                                        .as_item()
+                                })
+                                .find_map(|item| {
+                                    let hir::ItemKind::Function {
+                                        name: fn_name,
+                                        ..
+                                    } = &item.kind
+                                    else {
+                                        return None;
+                                    };
+
+                                    if !(matches!(fn_name.segments[0].resolution, hir::Resolution::Definition(_, id) if id == *def_id)
+                                        && fn_name.segments[1].identifier.symbol == name.symbol)
+                                    {
+                                        return None;
+                                    }
+
+                                    Some(*fn_name.resolution())
+                                })
+                            else {
+                                let err = self.type_context.get_error_type();
+                                self.insert_type(expression.hir_id, err);
+
+                                self.errors.push(TypeError {
+                                    origin: TypeConstraintOrigin {
+                                        span: name.span,
+                                        kind: TypeBoundary::FieldAccess,
+                                    },
+                                    kind: TypeErrorKind::UnknownFieldAccess {
+                                        target: target_ty.clone(),
+                                        name: name.symbol,
+                                    },
+                                });
+                                return;
+                            };
+
+                            let ty = self.type_context.compute_hir_resolution_type(resolution);
+
+                            self.method_resolution_map.insert(
+                                expression.hir_id.local_id,
+                                resolution.as_function_definition().unwrap(),
+                            );
+                            self.insert_type(expression.hir_id, ty);
+                        } else {
+                            let Some(field) = fields.iter().find(|f| f.name == name.symbol) else {
+                                let err = self.type_context.get_error_type();
+                                self.insert_type(expression.hir_id, err);
+
+                                self.errors.push(TypeError {
+                                    origin: TypeConstraintOrigin {
+                                        span: name.span,
+                                        kind: TypeBoundary::FieldAccess,
+                                    },
+                                    kind: TypeErrorKind::UnknownFieldAccess {
+                                        target: target_ty.clone(),
+                                        name: name.symbol,
+                                    },
+                                });
+                                return;
+                            };
+
+                            self.insert_type(expression.hir_id, field.ty.clone());
+                        }
+                    }
                     TypeKind::Error => todo!(),
                     _ => {
                         // All other types do not support field access
@@ -1368,10 +1764,21 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 // expression has the same type as the function's return type
                 self.insert_type(expression.hir_id, return_type.clone());
 
+                let mut expected_parameters = &parameters[..];
+
+                // for method calls, the self argument is passed implicitly
+                if let hir::ExpressionKind::FieldAccess {
+                    is_method_call: true,
+                    ..
+                } = &target.kind
+                {
+                    expected_parameters = &parameters[1..];
+                }
+
                 // Make sure the passed number of arguments matches the expected
                 // number (allowing variadics if applicable)
-                if arguments.len() < parameters.len()
-                    || (arguments.len() > parameters.len() && !*is_variadic)
+                if arguments.len() < expected_parameters.len()
+                    || (arguments.len() > expected_parameters.len() && !*is_variadic)
                 {
                     self.errors.push(TypeError {
                         origin: TypeConstraintOrigin {
@@ -1379,7 +1786,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             kind: TypeBoundary::FunctionCall,
                         },
                         kind: TypeErrorKind::ArgumentLengthMismatch {
-                            expected: parameters.len(),
+                            expected: expected_parameters.len(),
                             actual: arguments.len(),
                         },
                     });
@@ -1387,7 +1794,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 }
 
                 // check that argument types match the target's call signature
-                for (parameter_ty, argument) in parameters.iter().zip(arguments.iter()) {
+                for (parameter_ty, argument) in expected_parameters.iter().zip(arguments.iter()) {
                     let argument_ty = self.get_type(argument.hir_id);
 
                     self.add_equality_constraint(
@@ -1449,6 +1856,34 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
 
                         // For arithmetic operations the result is always the same as the inputs
                         self.insert_type(expression.hir_id, lhs_ty.clone());
+
+                        // pointer arithmetic
+
+                        match (&*lhs_ty, &*rhs_ty) {
+                            (
+                                TypeKind::Pointer(_) | TypeKind::Any,
+                                TypeKind::Infer(TypeVariable::Int(_)),
+                            ) => {
+                                let usize_ty = self
+                                    .type_context
+                                    .get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
+
+                                self.add_equality_constraint(
+                                    rhs_ty.clone(),
+                                    usize_ty,
+                                    TypeConstraintOrigin {
+                                        span: expression.span,
+                                        kind: TypeBoundary::BinaryOp,
+                                    },
+                                );
+                                return;
+                            }
+                            (
+                                TypeKind::Pointer(_) | TypeKind::Any,
+                                TypeKind::UnsignedInteger(UIntKind::USize),
+                            ) => return,
+                            _ => {}
+                        }
                     }
                     // If this is a logical operator, require that both types
                     // are bools
@@ -1524,6 +1959,11 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 match operator {
                     UnaryOperatorKind::Deref => {
                         let TypeKind::Pointer(inner_ty) = &*operand_ty else {
+                            if operand_ty.is_error() {
+                                self.copy_type_from(expression.hir_id, operand.hir_id);
+                                return;
+                            }
+
                             let err = self.type_context.get_error_type();
                             self.insert_type(expression.hir_id, err);
 
@@ -1542,10 +1982,60 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
 
                         self.insert_type(expression.hir_id, inner_ty.clone());
                     }
-                    UnaryOperatorKind::AddressOf => {
+                    UnaryOperatorKind::AddressOf { is_mutable } => {
+                        // FIXME: \/ \/ \/ implement this \/ \/ \/
+                        // assert!(!is_mutable, "type check mutability");
+
                         // TODO: can all types have their address taken? this is
                         // unclear. what about error types? what about zero
-                        // sized types? (rust returns 0x1 for ZSTs)
+                        // sized types? (rust returns 0x1 for ZSTs).
+
+                        // only some values may have their addresses taken. For
+                        // example, local variables, statics, field members, and
+                        // subscript expressions. It may be possible to take the
+                        // address of some intermediate values, but that adds
+                        // constraints on our LIR generation and optimization
+                        // since it forces the intermediate to be spilled on to
+                        // the stack.
+
+                        // if operand_ty.is_never() {
+                        //     unreachable!("cannot take the address of a never type")
+                        // }
+
+                        // if operand_ty.is_unit() {
+                        //     unreachable!("cannot take the address of a unit type")
+                        // }
+
+                        // match &operand.kind {
+                        //     hir::ExpressionKind::Literal(literal) => todo!(),
+                        //     hir::ExpressionKind::Path(path) => todo!(),
+                        //     hir::ExpressionKind::This => todo!(),
+                        //     hir::ExpressionKind::Array(array_initializer) => todo!(),
+                        //     hir::ExpressionKind::Tuple(expressions) => todo!(),
+                        //     hir::ExpressionKind::Struct { name, fields } => todo!(),
+                        //     hir::ExpressionKind::Block(block) => todo!(),
+                        //     hir::ExpressionKind::FieldAccess {
+                        //         target,
+                        //         name,
+                        //         is_method_call,
+                        //     } => todo!(),
+                        //     hir::ExpressionKind::FunctionCall { target, arguments } => todo!(),
+                        //     hir::ExpressionKind::Binary { lhs, operator, rhs } => todo!(),
+                        //     hir::ExpressionKind::Unary { operator, operand } => todo!(),
+                        //     hir::ExpressionKind::Cast { expression, ty } => todo!(),
+                        //     hir::ExpressionKind::If {
+                        //         condition,
+                        //         positive,
+                        //         negative,
+                        //     } => todo!(),
+                        //     hir::ExpressionKind::While { condition, block } => todo!(),
+                        //     hir::ExpressionKind::Assignment { lhs, rhs } => todo!(),
+                        //     hir::ExpressionKind::OperatorAssignment { operator, lhs, rhs } => {
+                        //         todo!()
+                        //     }
+             
+                        //     _ => todo!()
+                        // }
 
                         let pointer_ty =
                             self.type_context.intern_type(TypeKind::Pointer(operand_ty));
@@ -1708,12 +2198,53 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 error = Some(TypeErrorKind::IllegalMutation)
                             }
                         }
+                        hir::Resolution::Definition(DefinitionKind::Static, def_id) => {
+                            let hir::ItemKind::Static {
+                                is_mutable,
+                                name,
+                                ty,
+                                initializer,
+                            } = &self
+                                .type_context
+                                .module
+                                .get_owner(*def_id)
+                                .node()
+                                .as_item()
+                                .unwrap()
+                                .kind
+                            else {
+                                unreachable!()
+                            };
+
+                            if !is_mutable {
+                                error = Some(TypeErrorKind::IllegalMutation)
+                            }
+                        }
                         _ => error = Some(TypeErrorKind::InvalidAssignment),
                     },
                     hir::ExpressionKind::Unary {
                         operator: UnaryOperatorKind::Deref,
-                        ..
-                    } => todo!("check if deref can be mutated"),
+                        operand,
+                    } => {
+                        // FIXME: check if deref can be mutated
+
+                        let operand_ty = self.get_type(operand.hir_id);
+
+                        if operand_ty.is_error() {
+                            return;
+                        }
+
+                        if !matches!(&*operand_ty, TypeKind::Pointer(_)) {
+                            error = Some(TypeErrorKind::InvalidAssignment);
+                        }
+                    }
+                    hir::ExpressionKind::FieldAccess {
+                        target,
+                        name,
+                        is_method_call,
+                    } => {
+                        // FIXME: check if value can be mutated
+                    }
                     _ => error = Some(TypeErrorKind::InvalidAssignment),
                 }
 
@@ -1973,6 +2504,8 @@ impl ModuleTypeCheckResults {
 pub struct TypeCheckResults {
     pub owner_id: hir::LocalDefId,
     pub node_types: BTreeMap<hir::ItemLocalId, Type>,
+    pub method_resolutions: BTreeMap<hir::ItemLocalId, hir::LocalDefId>,
+    pub self_type: Option<Type>,
 }
 
 pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> ModuleTypeCheckResults {
@@ -1994,9 +2527,11 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
             type_context: &mut ctx,
             owner_id,
             node_to_type_map: BTreeMap::new(),
+            method_resolution_map: BTreeMap::new(),
             constraints: Vec::new(),
             errors: Vec::new(),
             within_loop: false,
+            self_type: OnceCell::new(),
             return_type: OnceCell::new(),
             next_integer_variable_id: IntVariableId::new(0),
             next_float_variable_id: FloatVariableId::new(0),
@@ -2007,6 +2542,15 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
 
         match body_ctx.into_output() {
             Ok(output) => {
+                for (id, ty) in &output.node_types {
+                    if ty.is_error() {
+                        eprintln!(
+                            "ERROR: unknown type left after type checking without any errors being reported (local_def_id = {id:?})"
+                        );
+                        tainted_with_errors = true;
+                    }
+                }
+
                 function_results.insert(owner_id, output);
             }
             Err(errors) => {

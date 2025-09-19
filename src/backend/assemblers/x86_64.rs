@@ -88,7 +88,9 @@ impl<'a> Assembler<'a> {
                 sized
             }
             lir::Operand::Immediate(
-                imm @ (lir::Immediate::StaticLabel(_) | lir::Immediate::FunctionLabel(_)),
+                imm @ (lir::Immediate::AnonymousStaticLabel(_)
+                | lir::Immediate::NamedStaticLabel(_)
+                | lir::Immediate::FunctionLabel(_)),
             ) => {
                 self.emit(format!("mov {destination}, {imm}"));
                 destination.as_64_bit()

@@ -1,0 +1,9 @@
+[default_config]
+# Configure documentation available for features like hover and completions
+assembler = "nasm"
+instruction_set = "x86/x86-64"
+
+[default_config.opts]
+compiler = "nasm" # or path to "nasm" if it isn't on your path
+diagnostics = true
+default_diagnostics = true

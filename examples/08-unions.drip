@@ -21,28 +21,28 @@ pub struct Option<T> {
 let a = b.c().d();
 
 pub fn Option<T>::unwrap(self) -> T {
-    match o {
+    match self {
         (some: v) => v,
         _ => panic!("called unwrap on `none` value")
     }
 }
 
 pub fn Option<T>::unwrap_or(self, default: T) -> T {
-    match o {
+    match self {
         (some: v) => v,
         _ => default
     }
 }
 
 pub fn Option<T: Default>::unwrap_or_default(self) -> T {
-    match o {
+    match self {
         (some: v) => v,
         _ => <T as Default>::default()
     }
 }
 
 pub fn Option<T>::unwrap_or_else(self, f: fn() -> T) -> T {
-    match o {
+    match self {
         (some: v) => v,
         _ => f()
     }
@@ -70,7 +70,7 @@ pub union Result<T, E> {
     err: E,
 }
 
-let r = Result::<i32, String> { ok: 1 };
+let r = Result<i32, String> { ok: 1 };
 
 // Similar pattern matching behavior
 match r {
@@ -85,19 +85,26 @@ match r {
 // Bang field access operator (panics if union is of a different variant)
 let ok = r!.ok;
 
+// "IKWID" field access operator (UB if union is of a different variant)
+let err = r~>err;
+
 // Safe field access operator (returns Option<T> where T is the type of the 
 // variant being accessed)
 let maybe_ok = r.ok;
 
 // Safe field access with a value as a fallback in the none case 
 // (Option::unwrap_or in rust)
-let ok_or_1 = r.ok ?: 1; 
+let ok_or_1 = r.ok ?? 1; 
 
 // Safe field access with the default value as a fallback in the none case
 // (Option::unwrap_or_default in rust)
-let ok_or_0 = r.ok ?: _; 
+let ok_or_0 = r.ok ?? _; 
 
 // Does not contain an auto generated tag. Unsafe to directly access variants. 
+// UB if accessing a variant while the underlying data contains an invalid bit 
+// pattern for that type. Can be used for manually implemented tagged unions 
+// (in protocols for example) or for evil bit hacks.
+//
 // Requires use of the "IKWID field access operator" (~>), and pattern matching 
 // is not possible
 #[untagged]

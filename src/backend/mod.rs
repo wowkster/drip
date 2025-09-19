@@ -1,5 +1,5 @@
 //! The backend of the compiler deals with the task of converting our target
-//! agnostic LIR to asembly instructions for a specific platform. This is
+//! agnostic LIR to assembly instructions for a specific platform. This is
 //! generally a straightforward process since many LIR constructs can be
 //! translated directly to assembly.
 

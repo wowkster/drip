@@ -25,6 +25,7 @@ pub mod pretty_print;
 #[derive(Debug)]
 pub struct Module {
     pub function_definitions: BTreeMap<hir::LocalDefId, FunctionDefinition>,
+    pub static_definitions: BTreeMap<hir::LocalDefId, StaticDefinition>,
     pub static_strings: BTreeMap<StaticLabelId, InternedSymbol>,
     pub static_c_strings: BTreeMap<StaticLabelId, InternedSymbol>,
 }
@@ -34,6 +35,9 @@ pub struct FunctionDefinition {
     pub symbol_name: InternedSymbol,
     /// Allocated virtual registers used to store temporary data
     pub registers: BTreeMap<RegisterId, Register>,
+    /// The register argument used to return a struct from the function by value
+    pub struct_return: Option<RegisterId>,
+    /// The registers holding the arguments to the function (implicitly defined)
     pub arguments: Vec<RegisterId>,
     pub blocks: BTreeMap<BlockId, Block>,
 }
@@ -45,12 +49,19 @@ impl FunctionDefinition {
                 Immediate::Int(_, integer_width) => Type::Integer(integer_width),
                 Immediate::Float(_, float_width) => Type::Float(float_width),
                 Immediate::Bool(_) => Type::Integer(IntegerWidth::I8),
-                Immediate::StaticLabel(_) => Type::Pointer,
-                Immediate::FunctionLabel(_) => Type::Pointer,
+                Immediate::AnonymousStaticLabel(_)
+                | Immediate::NamedStaticLabel(_)
+                | Immediate::FunctionLabel(_) => Type::Pointer,
             },
             Operand::Register(register_id) => self.registers[&register_id].ty.clone(),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct StaticDefinition {
+    pub symbol_name: InternedSymbol,
+    pub layout: Layout,
 }
 
 #[derive(Debug)]
@@ -89,7 +100,7 @@ simple_index! {
     pub struct RegisterId;
 }
 
-/// A represenation of types within the LIR. This is significantly simplified
+/// A representation of types within the LIR. This is significantly simplified
 /// compared to the types coming from the HIR since we dont need as much rich
 /// type information at this stage.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,7 +112,7 @@ pub enum Type {
     Array(Rc<Type>, usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntegerWidth {
     I8,
     I16,
@@ -147,7 +158,7 @@ impl From<FloatKind> for FloatWidth {
 }
 
 /// Represents an anonymous structure made up of some list of types. This is a
-/// seperate structure to more easily allow computing of struct field layouts.
+/// separate structure to more easily allow computing of struct field layouts.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Struct(pub Rc<[Type]>);
 
@@ -266,7 +277,8 @@ pub enum Immediate {
     Int(u64, IntegerWidth),
     Float(f64, FloatWidth),
     Bool(bool),
-    StaticLabel(StaticLabelId),
+    AnonymousStaticLabel(StaticLabelId),
+    NamedStaticLabel(InternedSymbol),
     FunctionLabel(InternedSymbol),
 }
 
@@ -290,6 +302,7 @@ pub enum IntegerCastKind {
     Truncate,
 }
 
+#[derive(Debug)]
 pub struct Layout {
     pub size: usize,
     pub alignment: usize,

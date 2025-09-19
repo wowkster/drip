@@ -22,7 +22,7 @@ mod private {
 /// Thin pointer to an interned type kind. Do not construct directly. Instead,
 /// use [`TypeContext::insert_type`]
 ///
-/// FIXME: we could use referential equality here since types are intered and
+/// FIXME: we could use referential equality here since types are interned and
 /// guaranteed to be unique
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Type(Rc<TypeKind>, private::PrivateZst);
@@ -155,12 +155,13 @@ impl TypeKind {
             TypeKind::Integer(_)
             | TypeKind::UnsignedInteger(_)
             | TypeKind::Float(_)
-            | TypeKind::Infer(_) => true,
+            | TypeKind::Infer(_)
+            | TypeKind::Pointer(_)
+            | TypeKind::Any => true,
             TypeKind::Never
             | TypeKind::Unit
             | TypeKind::Bool
             | TypeKind::Char
-            | TypeKind::Pointer(_)
             | TypeKind::Slice(_)
             | TypeKind::Str
             | TypeKind::CStr
@@ -168,7 +169,6 @@ impl TypeKind {
             | TypeKind::Tuple(_)
             | TypeKind::Struct { .. }
             | TypeKind::FunctionPointer { .. }
-            | TypeKind::Any
             | TypeKind::Error => false,
         }
     }
@@ -202,6 +202,10 @@ impl TypeKind {
 
     pub fn is_error(&self) -> bool {
         matches!(self, TypeKind::Error)
+    }
+
+    pub fn is_struct(&self) -> bool {
+        matches!(self, TypeKind::Struct { .. })
     }
 
     /// Collects the list of free type variables in this type, traversing
@@ -289,7 +293,28 @@ impl core::fmt::Display for TypeKind {
             Self::Struct { name, .. } => {
                 write!(f, "{name}")
             }
-            Self::FunctionPointer { .. } => todo!("Format function pointers"),
+            Self::FunctionPointer {
+                parameters,
+                return_type,
+                is_variadic,
+            } => {
+                // fn (i32, bool) -> ()
+
+                write!(f, "fn (")?;
+
+                for (i, ty) in parameters.iter().enumerate() {
+                    write!(f, "{}", **ty)?;
+
+                    if i != parameters.len() - 1 || *is_variadic {
+                        write!(f, ", ")?;
+                    }
+                }
+                if *is_variadic {
+                    write!(f, "...")?;
+                }
+                write!(f, ") -> ")?;
+                write!(f, "{}", *return_type)
+            }
             Self::Any => write!(f, "*any"),
             Self::Infer(type_variable) => match type_variable {
                 TypeVariable::Int(id) => write!(f, "{{integer@{}}}", id.index()),

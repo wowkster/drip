@@ -21,6 +21,7 @@ pub mod id;
 pub mod visit;
 
 pub use id::*;
+use itertools::Itertools;
 
 #[derive(Debug)]
 pub struct Module {
@@ -67,6 +68,13 @@ impl Module {
         } else {
             Some(owner.nodes[node.parent].node.clone())
         }
+    }
+
+    /// Given a path, generate the mangled global symbol which can be used in
+    /// the assembly. This symbol uses the module name and parent hierarchy to
+    /// remove name conflicts from other translation units
+    pub fn global_symbol_for(&self, path: &Path) -> InternedSymbol {
+        path.as_local_symbol()
     }
 }
 
@@ -122,6 +130,7 @@ pub enum Node {
     LetStatement(Rc<LetStatement>),
     Type(Rc<Type>),
     PathSegment(Rc<PathSegment>),
+    StructInitializerField(Rc<StructInitializerField>),
 }
 
 impl Node {
@@ -136,6 +145,7 @@ impl Node {
             Node::LetStatement(v) => v.hir_id,
             Node::Type(v) => v.hir_id,
             Node::PathSegment(v) => v.hir_id,
+            Node::StructInitializerField(v) => v.hir_id,
         }
     }
 
@@ -149,7 +159,8 @@ impl Node {
             | Node::LetStatement(_)
             | Node::Type(_)
             | Node::Expression(_)
-            | Node::PathSegment(_) => None,
+            | Node::PathSegment(_)
+            | Node::StructInitializerField(_) => None,
         }
     }
 
@@ -206,7 +217,7 @@ pub struct Identifier {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Item {
     pub owner_id: LocalDefId,
     pub kind: ItemKind,
@@ -219,10 +230,10 @@ impl Item {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ItemKind {
     Function {
-        name: Identifier,
+        name: Path,
         signature: FunctionSignature,
         body: BodyId,
     },
@@ -234,7 +245,13 @@ pub enum ItemKind {
         name: Identifier,
         ty: Rc<Type>,
     },
-    // TODO: enums, unions, static, const, submodule, impl
+    Static {
+        is_mutable: bool,
+        name: Identifier,
+        ty: Rc<Type>,
+        initializer: Rc<Expression>,
+    },
+    // TODO: enums, unions, const, submodule, impl
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +264,7 @@ pub struct StructField {
 
 #[derive(Debug, Clone)]
 pub struct FunctionSignature {
+    pub self_parameter: Option<SelfParameter>,
     /// List of inputs to the function
     pub parameters: Rc<[Rc<Type>]>,
     /// If present, is the expected variadic type (`any` for compat with c
@@ -256,6 +274,12 @@ pub struct FunctionSignature {
     pub return_type: Option<Rc<Type>>,
     // Span of the function decl without body
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SelfParameter {
+    Owned,
+    Pointer { is_mutable: bool },
 }
 
 /// The body of a function or constant value
@@ -319,6 +343,23 @@ pub struct LetStatement {
 }
 
 #[derive(Debug)]
+pub enum ArrayInitializer {
+    Repeated {
+        value: Rc<Expression>,
+        length: usize,
+    },
+    Specific(Rc<[Rc<Expression>]>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StructInitializerField {
+    pub hir_id: HirId,
+    pub name: Identifier,
+    pub value: Rc<Expression>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
 pub struct Expression {
     pub hir_id: HirId,
     pub kind: ExpressionKind,
@@ -329,11 +370,18 @@ pub struct Expression {
 pub enum ExpressionKind {
     Literal(Literal),
     Path(Path),
-    Block(Rc<Block>),
+    This,
+    Array(ArrayInitializer),
     Tuple(Rc<[Rc<Expression>]>),
+    Struct {
+        name: Path,
+        fields: Rc<[Rc<StructInitializerField>]>,
+    },
+    Block(Rc<Block>),
     FieldAccess {
         target: Rc<Expression>,
         name: Identifier,
+        is_method_call: bool,
     },
     FunctionCall {
         target: Rc<Expression>,
@@ -489,6 +537,17 @@ impl Path {
     pub fn resolution(&self) -> &Resolution {
         &self.segments.last().as_ref().unwrap().resolution
     }
+
+    /// Returns a string representation of the path which can be used for
+    pub fn as_local_symbol(&self) -> InternedSymbol {
+        InternedSymbol::new(
+            &self
+                .segments
+                .iter()
+                .map(|s| s.identifier.symbol.value())
+                .join("::"),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -499,7 +558,7 @@ pub struct PathSegment {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution<R = ItemLocalId> {
     // Any namespace
     // TODO: use global ID once we support modules
@@ -523,4 +582,20 @@ pub enum DefinitionKind {
     Enum,
     Union,
     Alias,
+}
+
+impl<R> Resolution<R> {
+    pub fn as_function_definition(self) -> Option<LocalDefId> {
+        match self {
+            Resolution::Definition(DefinitionKind::Function, local_def_id) => Some(local_def_id),
+            _ => None,
+        }
+    }
+
+    pub fn as_static_definition(self) -> Option<LocalDefId> {
+        match self {
+            Resolution::Definition(DefinitionKind::Static, local_def_id) => Some(local_def_id),
+            _ => None,
+        }
+    }
 }

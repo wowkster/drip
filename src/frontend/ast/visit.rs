@@ -6,7 +6,12 @@ use super::{
     Literal, Local, LocalKind, Module, QualifiedIdentifier, Statement, StatementKind, Type,
     TypeAlias, TypeKind,
 };
-use crate::frontend::ast::{StructDefinition, StructField};
+use crate::{
+    frontend::ast::{
+        ArrayInitializer, Static, StructDefinition, StructField, StructInitializerField,
+    },
+    middle::resolve::Namespace,
+};
 
 pub trait Visitor<'ast>: Sized {
     fn visit_item(&mut self, item: &'ast Item) {
@@ -41,13 +46,21 @@ pub trait Visitor<'ast>: Sized {
         walk_type_alias(self, type_alias)
     }
 
+    fn visit_static(&mut self, static_: &'ast Static) {
+        walk_static(self, static_)
+    }
+
     fn visit_identifier(&mut self, _identifier: &'ast Identifier) {}
 
     fn visit_type(&mut self, ty: &'ast Type) {
         walk_type(self, ty)
     }
 
-    fn visit_qualified_identifier(&mut self, qualified_identifier: &'ast QualifiedIdentifier) {
+    fn visit_qualified_identifier(
+        &mut self,
+        qualified_identifier: &'ast QualifiedIdentifier,
+        _namespace: Namespace,
+    ) {
         walk_qualified_identifier(self, qualified_identifier)
     }
 
@@ -65,6 +78,10 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_expression(&mut self, expression: &'ast Expression) {
         walk_expression(self, expression)
+    }
+
+    fn visit_struct_initializer_field(&mut self, field: &'ast StructInitializerField) {
+        walk_struct_initializer_field(self, field)
     }
 
     fn visit_literal(&mut self, _literal: &'ast Literal) {}
@@ -91,6 +108,9 @@ pub fn walk_item<'a>(visitor: &mut impl Visitor<'a>, item: &'a Item) {
         ItemKind::TypeAlias(type_alias) => {
             visitor.visit_type_alias(type_alias);
         }
+        ItemKind::Static(static_) => {
+            visitor.visit_static(static_);
+        }
     }
 }
 
@@ -106,7 +126,7 @@ pub fn walk_function_signature<'a>(
     visitor: &mut impl Visitor<'a>,
     signature: &'a FunctionSignature,
 ) {
-    visitor.visit_identifier(&signature.name);
+    visitor.visit_qualified_identifier(&signature.name, Namespace::Value);
     visitor.visit_function_parameter_list(&signature.parameters);
 
     if let Some(ty) = &signature.return_type {
@@ -152,10 +172,16 @@ pub fn walk_type_alias<'a>(visitor: &mut impl Visitor<'a>, alias: &'a TypeAlias)
     visitor.visit_type(&alias.ty);
 }
 
+pub fn walk_static<'a>(visitor: &mut impl Visitor<'a>, static_: &'a Static) {
+    visitor.visit_identifier(&static_.name);
+    visitor.visit_type(&static_.ty);
+    visitor.visit_expression(&static_.initializer);
+}
+
 pub fn walk_type<'a>(visitor: &mut impl Visitor<'a>, ty: &'a Type) {
     match &ty.kind {
         TypeKind::QualifiedIdentifier(qualified_identifier) => {
-            visitor.visit_qualified_identifier(qualified_identifier)
+            visitor.visit_qualified_identifier(qualified_identifier, Namespace::Type)
         }
         TypeKind::Pointer(ty) => visitor.visit_type(ty),
         TypeKind::Slice(ty) => visitor.visit_type(ty),
@@ -210,14 +236,30 @@ pub fn walk_expression<'a>(visitor: &mut impl Visitor<'a>, expression: &'a Expre
     match &expression.kind {
         ExpressionKind::Literal(literal) => visitor.visit_literal(literal),
         ExpressionKind::QualifiedIdentifier(qualified_identifier) => {
-            visitor.visit_qualified_identifier(qualified_identifier)
+            visitor.visit_qualified_identifier(qualified_identifier, Namespace::Value)
         }
+        ExpressionKind::This => {}
         ExpressionKind::Grouping(expression) => visitor.visit_expression(expression),
         ExpressionKind::Tuple(expressions) => {
             expressions.iter().for_each(|e| visitor.visit_expression(e))
         }
+        ExpressionKind::Array(array_initializer) => match array_initializer.as_ref() {
+            ArrayInitializer::Repeated { value, length } => {
+                visitor.visit_expression(value);
+                visitor.visit_literal(length);
+            }
+            ArrayInitializer::Specific(expressions) => {
+                expressions.iter().for_each(|e| visitor.visit_expression(e))
+            }
+        },
+        ExpressionKind::Struct { name, fields } => {
+            visitor.visit_qualified_identifier(name, Namespace::Type);
+            fields
+                .iter()
+                .for_each(|e| visitor.visit_struct_initializer_field(e))
+        }
         ExpressionKind::Block(block) => visitor.visit_block(block),
-        ExpressionKind::FieldAccess { target, name } => {
+        ExpressionKind::FieldAccess { target, name, .. } => {
             visitor.visit_expression(target);
             visitor.visit_identifier(name);
         }
@@ -266,6 +308,14 @@ pub fn walk_expression<'a>(visitor: &mut impl Visitor<'a>, expression: &'a Expre
             }
         }
     }
+}
+
+pub fn walk_struct_initializer_field<'a>(
+    visitor: &mut impl Visitor<'a>,
+    field: &'a StructInitializerField,
+) {
+    visitor.visit_identifier(&field.name);
+    visitor.visit_expression(&field.value);
 }
 
 pub fn walk_function_call_argument_list<'a>(

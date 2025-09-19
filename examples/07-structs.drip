@@ -1,26 +1,25 @@
 //! Structure methods and constants not implemeted yet. This is just some
 //! experimentation for what they could look like
 
-pub struct Node {
+struct Node {
     a: u32,
     b: i64,
     c: String
 }
 
-const Node::MAX_ID: u32 = 0;
+// const Node::MAX_ID: u32 = 0;
 
-fn Node::new(data: *any) {
+fn Node::new(data: *any) -> Node {
 
 }
 
-fn Node::append(*self, data: *any) -> (u8, u8) {
+fn Node::append(*mut self, data: *any) -> (u8, u8) {
     self.#a
 }
 
 fn Node#append(*self, data: *any) {
     self.#a
 }
-
 
 let node = Node::new(&0);
 node.append(&2);
@@ -30,5 +29,3 @@ fn (*Node) append(other: *Node) {
 }
 
 Node::new();
-
-
