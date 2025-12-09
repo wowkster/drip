@@ -124,6 +124,7 @@ impl<'a> Assembler<'a> {
     }
 
     pub fn store_operand(&mut self, destination: RegisterId, source: X86FullRegister) {
+        dbg!(destination, source);
         let ty = &self.function.registers[&destination].ty;
         let sized = source.with_size_bytes(ty.layout().size);
 

@@ -1,4 +1,5 @@
 use std::{
+    any::TypeId,
     collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
 };
@@ -345,40 +346,50 @@ impl<'hir> BodyLoweringContext<'hir> {
         }
     }
 
-    fn lower_struct_copy(
-        &mut self,
-        dest_struct_ptr_reg: lir::RegisterId,
-        src_struct_ptr_reg: lir::RegisterId,
-        structure_ty: lir::Struct,
-    ) {
-        // FIXME: could we just memcpy instead?
+    /// Outputs a copy from src into dest. For scalar types, this operation is a
+    /// Move instruction. For aggregate types, this is a field by field copy
+    /// operation.
+    fn lower_copy(&mut self, dest_reg: lir::RegisterId, src_reg: lir::RegisterId, ty: ty::Type) {
+        if ty.is_struct() {
+            // FIXME: could we just memcpy instead?
 
-        for (i, f) in structure_ty.0.iter().enumerate() {
-            let src_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-            self.push_instruction(lir::Instruction::GetStructElementPointer {
-                destination: src_ptr_reg,
-                source: lir::Operand::Register(src_struct_ptr_reg),
-                ty: structure_ty.clone(),
-                index: i,
-            });
+            let ty = self.lower_type(ty);
+            let lir::Type::Struct(structure_ty) = ty else {
+                unreachable!()
+            };
 
-            let tmp_ptr_reg = self.create_register_with_lir_type(f.to_owned());
-            self.push_instruction(lir::Instruction::LoadMem {
-                destination: tmp_ptr_reg,
-                source: lir::Operand::Register(src_ptr_reg),
-            });
+            for (i, f) in structure_ty.0.iter().enumerate() {
+                let src_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                self.push_instruction(lir::Instruction::GetStructElementPointer {
+                    destination: src_ptr_reg,
+                    source: lir::Operand::Register(src_reg),
+                    ty: structure_ty.clone(),
+                    index: i,
+                });
 
-            let dest_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-            self.push_instruction(lir::Instruction::GetStructElementPointer {
-                destination: dest_ptr_reg,
-                source: lir::Operand::Register(dest_struct_ptr_reg),
-                ty: structure_ty.clone(),
-                index: i,
-            });
+                let tmp_ptr_reg = self.create_register_with_lir_type(f.to_owned());
+                self.push_instruction(lir::Instruction::LoadMem {
+                    destination: tmp_ptr_reg,
+                    source: lir::Operand::Register(src_ptr_reg),
+                });
 
-            self.push_instruction(lir::Instruction::StoreMem {
-                destination: lir::Operand::Register(dest_ptr_reg),
-                source: lir::Operand::Register(tmp_ptr_reg),
+                let dest_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                self.push_instruction(lir::Instruction::GetStructElementPointer {
+                    destination: dest_ptr_reg,
+                    source: lir::Operand::Register(dest_reg),
+                    ty: structure_ty.clone(),
+                    index: i,
+                });
+
+                self.push_instruction(lir::Instruction::StoreMem {
+                    destination: lir::Operand::Register(dest_ptr_reg),
+                    source: lir::Operand::Register(tmp_ptr_reg),
+                });
+            }
+        } else {
+            self.push_instruction(lir::Instruction::Move {
+                destination: dest_reg,
+                source: lir::Operand::Register(src_reg),
             });
         }
     }
@@ -418,7 +429,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
         for (name, ty) in body.params.iter().zip(signature.parameters.iter()) {
             let ty = self.type_map.get_type(ty.hir_id);
-            let id = self.create_register(ty);
+
+            let lir_ty = if ty.is_struct() {
+                lir::Type::Pointer
+            } else {
+                self.lower_type(ty)
+            };
+
+            let id = self.create_register_with_lir_type(lir_ty);
             self.local_to_register_map.insert(name.hir_id.local_id, id);
             self.arguments.push(id);
         }
@@ -431,15 +449,15 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
         let implicit_return = body.block.expression.as_ref();
 
         if let Some(e) = implicit_return
-            && let lir::Type::Struct(structure_ty) =
-                self.lower_type(self.type_map.get_type(e.hir_id))
+            && let ty = self.type_map.get_type(e.hir_id)
+            && ty.is_struct()
         {
             let dest_struct_ptr_reg = self
                 .struct_return
                 .expect("functions returning a struct should have an sret set");
             let src_struct_ptr_reg = self.expression_to_register_map[&e.hir_id.local_id];
 
-            self.lower_struct_copy(dest_struct_ptr_reg, src_struct_ptr_reg, structure_ty);
+            self.lower_copy(dest_struct_ptr_reg, src_struct_ptr_reg, ty);
             self.push_instruction(lir::Instruction::Return { value: None });
         } else {
             // FIXME: dont add an extra return if the last expr is already a return stmt
@@ -464,6 +482,11 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
     }
 
     fn visit_let_statement(&mut self, let_stmt: std::rc::Rc<hir::LetStatement>) {
+        self.push_instruction(lir::Instruction::Comment(format!(
+            "let {} = ...",
+            let_stmt.name.symbol
+        )));
+
         hir::visit::walk_let_statement(self, let_stmt.clone());
 
         let ty = self.type_map.get_type(let_stmt.hir_id);
@@ -471,21 +494,25 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
         if let Some(init) = &let_stmt.initializer {
             let src_reg = self.expression_to_register_map[&init.hir_id.local_id];
 
-            // for structs, we need to create a copy
+            // if the expression is a function call, we just use the destination
+            // register from that. otherwise we create a copy of the source
 
-            if ty.is_struct() && !matches!(init.kind, hir::ExpressionKind::FunctionCall { .. }) {
-                let ty = self.lower_type(ty);
-                let lir::Type::Struct(structure_ty) = ty.clone() else {
-                    unreachable!()
+            if !matches!(init.kind, hir::ExpressionKind::FunctionCall { .. }) {
+                let dest_reg = if ty.is_struct() {
+                    let lir_ty = self.lower_type(ty.clone());
+
+                    let dest_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                    self.push_instruction(lir::Instruction::AllocStack {
+                        destination: dest_reg,
+                        ty: lir_ty,
+                    });
+
+                    dest_reg
+                } else {
+                    self.create_register(ty.clone())
                 };
 
-                let dest_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::AllocStack {
-                    destination: dest_reg,
-                    ty: ty,
-                });
-
-                self.lower_struct_copy(dest_reg, src_reg, structure_ty);
+                self.lower_copy(dest_reg, src_reg, ty);
 
                 self.local_to_register_map
                     .insert(let_stmt.hir_id.local_id, dest_reg);
@@ -841,8 +868,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     .as_ref()
                                     .map(|ty| self.type_map.get_type(ty.hir_id));
 
-                                let destination_reg =
-                                    return_ty.clone().map(|ty| self.create_register(ty));
+                                let destination_reg = return_ty.clone().map(|ty| {
+                                    let lir_ty = if ty.is_struct() {
+                                        lir::Type::Pointer
+                                    } else {
+                                        self.lower_type(ty)
+                                    };
+                                    self.create_register_with_lir_type(lir_ty)
+                                });
 
                                 let args = return_ty
                                     .clone()
@@ -872,13 +905,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                                 let ty = self.type_map.get_type(arg.hir_id);
 
                                                 if ty.is_struct() {
-                                                    let ty = self.lower_type(ty);
-
-                                                    let lir::Type::Struct(structure_ty) =
-                                                        ty.clone()
-                                                    else {
-                                                        unreachable!()
-                                                    };
+                                                    let lir_ty = self.lower_type(ty.clone());
 
                                                     let copy_struct_ptr_reg = self
                                                         .create_register_with_lir_type(
@@ -888,14 +915,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                                     self.push_instruction(
                                                         lir::Instruction::AllocStack {
                                                             destination: copy_struct_ptr_reg,
-                                                            ty: ty,
+                                                            ty: lir_ty,
                                                         },
                                                     );
 
-                                                    self.lower_struct_copy(
+                                                    self.lower_copy(
                                                         copy_struct_ptr_reg,
                                                         expr_reg,
-                                                        structure_ty,
+                                                        ty,
                                                     );
 
                                                     copy_struct_ptr_reg
@@ -1670,17 +1697,17 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // If we're returning a struct, we need to copy all of it's
                 // fields into the pointer stored in the sret register
                 if let Some(v) = value.clone()
-                    && let lir::Type::Struct(structure_ty) =
-                        self.lower_type(self.type_map.get_type(v.hir_id))
+                    && let ty = self.type_map.get_type(v.hir_id)
+                    && ty.is_struct()
                 {
                     let dest_struct_ptr_reg = self
                         .struct_return
                         .expect("functions returning a struct should have an sret set");
 
-                    self.lower_struct_copy(
+                    self.lower_copy(
                         dest_struct_ptr_reg,
                         self.expression_to_register_map[&v.hir_id.local_id],
-                        structure_ty,
+                        ty,
                     );
                     self.push_instruction(lir::Instruction::Return { value: None });
                     return;

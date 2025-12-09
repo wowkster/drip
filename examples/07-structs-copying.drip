@@ -31,5 +31,5 @@ fn returns_struct_copy() -> Node {
 /// this function gets a copy of the struct which is created in the caller and 
 /// passed by reference
 fn accepts_struct_copy(node: Node) {
-    print("a = {}, b = {}", node.a, node.b);
+    print("a = {}, b = {}\n", node.a, node.b);
 }

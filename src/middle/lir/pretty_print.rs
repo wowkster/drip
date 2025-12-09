@@ -189,7 +189,9 @@ impl core::fmt::Display for lir::Instruction {
 
                 write!(f, "{}", ")".white())
             }
-            lir::Instruction::Comment(_) => todo!(),
+            lir::Instruction::Comment(text) => {
+                write!(f, "{} {}", ";".bright_black(), text.bright_black())
+            }
         }
     }
 }

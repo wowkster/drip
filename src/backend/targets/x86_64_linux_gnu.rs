@@ -171,6 +171,23 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
 
     /* Move the function arguments into the stack registers */
 
+    if let Some(sret_reg) = function.struct_return {
+        assembler.emit(format!(
+            "; store sret arg {} into its stack register",
+            strip_ansi_escapes::strip_str(sret_reg.to_string())
+        ));
+        assembler.emit(format!(
+            "mov [rbp - {}], {}",
+            stack_frame_register_offset_map[&sret_reg], ARG_REGS[0],
+        ));
+    }
+
+    let starting_arg_index = if function.struct_return.is_some() {
+        1
+    } else {
+        0
+    };
+    
     for (i, arg) in function.arguments.iter().enumerate() {
         assembler.emit(format!(
             "; store arg {} into its stack register",
@@ -178,7 +195,8 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
         ));
         assembler.emit(format!(
             "mov [rbp - {}], {}",
-            stack_frame_register_offset_map[arg], ARG_REGS[i],
+            stack_frame_register_offset_map[arg],
+            ARG_REGS[starting_arg_index + i],
         ));
     }
 
