@@ -1,0 +1,64 @@
+// struct IntStack {
+//     buffer: [u8; 10],
+//     len: usize
+// }
+
+// fn IntStack::new() -> IntStack {
+//     IntStack {
+//         buffer: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+//         len: 0
+//     }
+// }
+
+// fn IntStack::push(*self, value: u8) {
+//     if (*self).len >= 10 {
+//         print("[IntStack::push] maximum capacity exceeded\n");
+//         exit(1);
+//     }
+
+//     buffer[(*self).len] = value;
+//     (*self).len = (*self).len + 1;
+// }
+
+// fn IntStack::pop(*self) -> u8 {
+//     if (*self).len <= 0 {
+//         print("[IntStack::pop] minimum capacity exceeded\n");
+//         exit(1);
+//     }
+
+//     (*self).len = (*self).len - 1;
+//     buffer[(*self).len]
+// }
+
+// fn IntStack::is_empty(*self) -> bool {
+//     (*self).len != 0
+// }
+
+// fn printi(value: i32) {
+//     if value < 0 {
+//         print("-");
+//     }
+
+//     let mut stack = IntStack::new();
+
+//     while value != 0 {
+//         let digit = value % 10;
+//         value = value / 10;
+
+//         stack.push(digit);
+//     }
+
+//     while !stack.is_empty() {
+//         print!("{}", stack.pop());
+//     }
+// }
+
+fn main() {
+    print("{}\n", 0);
+    print("{}\n", 1);
+    print("{}\n", -1);
+    print("{}\n", 12345);
+    print("{}\n", -12345);
+    print("{}\n", 2147483647);
+    print("{}\n", -2147483648);
+}

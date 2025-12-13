@@ -8,13 +8,23 @@ struct Node {
 
 fn main() {
     let node = returns_struct_copy();
+    
+    print("a = {}, b = {}\n", node.a, node.b);
 
     accepts_struct_copy(node);
-    
+
     /// should create a full copy of the struct
     let copy = node;
+
+    node.b = 4;
     
+    print("a = {}, b = {}\n", copy.a, copy.b);
+
+    accepts_struct_copy(node);
     accepts_struct_copy(copy);
+
+    print("a = {}, b = {}\n", node.a, node.b);
+    print("a = {}, b = {}\n", copy.a, copy.b);
 }
 
 /// this function returns a copy of the struct which is created. the memory for
@@ -28,8 +38,10 @@ fn returns_struct_copy() -> Node {
     node
 }
 
-/// this function gets a copy of the struct which is created in the caller and 
+/// this function gets a copy of the struct which is created in the caller and
 /// passed by reference
 fn accepts_struct_copy(node: Node) {
+    node.a = 3;
+
     print("a = {}, b = {}\n", node.a, node.b);
 }

@@ -1,0 +1,126 @@
+//! This example is an implementation of the Rule 110 algorithm, commonly used to
+//! show that a programming language is turring complete. We are very close to
+//! getting this to work as soon as we get structure methods and array indexing
+//! implemented.
+
+// This is where we'll get Int32Vec in the future
+// include core::collections;
+
+
+fn memcpy(dest: *mut any, src: *mut any, len: usize) {
+    let mut i = 0;
+
+    while i < len {
+        print("*((src + i as *any) as *u8) = {}\n", *((src + i as *any) as *u8) as i64);
+        *((dest + i as *any) as *u8) = *((src + i as *any) as *u8);
+        i = i + 1;
+    }
+}
+
+static mut ARENA: [u8; 4096] = [0; 4096];
+static mut POSITION: usize = 0;
+
+/// allocate memory from a static arena
+fn malloc(size: usize) -> *mut any {
+    if POSITION + size > 4096 {
+        return 0 as *mut any;
+    }
+
+    let addr = (&mut ARENA) as *u8 + POSITION as *u8;
+    POSITION = POSITION + size;
+
+    print("[malloc] allocated 0x{} bytes at 0x{}\n", size, addr);
+
+    addr as *any
+}
+
+fn free(ptr: *any) {
+    // no-op
+}
+
+struct Int32Vec {
+    ptr: *i32,
+    len: usize,
+    capacity: usize
+}
+
+fn Int32Vec::new() -> Int32Vec {
+    Int32Vec {
+        ptr: 0 as *i32,
+        len: 0,
+        capacity: 0,
+    }
+}
+
+fn Int32Vec::get(*self, index: usize) -> i32 {
+    if index > (*self).len -1 {
+        print("[Int32Vec::get] Index {} is out of bounds for len {}", index, (*self).len);
+        exit(1);
+    }
+
+    *((*self).ptr + (index * 4))
+}
+
+
+fn Int32Vec::push(*mut self, value: i32) {
+    // regrow to 2x cap
+    if (*self).len == (*self).capacity {
+        (*self).capacity = if (*self).capacity == 0 {
+            8
+        } else {
+            (*self).capacity * 2
+        };
+
+        let new_ptr = malloc((*self).capacity * 4) as *i32;
+
+        if new_ptr == 0 as *i32 {
+            print("[Int32Vec::push] Failed to allocate memory\n");
+            exit(1);
+        }
+
+        memcpy(new_ptr as *any, (*self).ptr as *any, (*self).len * 4);
+
+        free((*self).ptr as *any);
+        (*self).ptr = new_ptr;
+    }
+
+    print("pushing {}\n", value);
+
+    *((*self).ptr + (*self).len * 4) = value;
+    (*self).len = (*self).len + 1;
+}
+
+fn main() {
+    let initial_cells = Int32Vec::new();
+    
+    initial_cells.push(0);
+    initial_cells.push(1);
+    initial_cells.push(2);
+    
+    let len = initial_cells.len;
+  
+    print("len = {}\n", len);
+    print("4 % len = {}\n", 4 % len);
+    print("3 % len = {}\n", 3 % len);
+    print("2  % len = {}\n", 2 % len);
+    print("1  % len = {}\n", 1 % len);
+    print("0  % len = {}\n", 0 % len);
+    print("-1 % len = {}\n", -1 % len);
+    print("-2 % len = {}\n", -2 % len);
+    print("-3 % len = {}\n", -3 % len);
+    print("-4 % len = {}\n", -4 % len);
+    print("-5 % len = {}\n", -5 % len);
+    print("(0 - 1) % len = {}\n", (0 - 1) % len);
+    print("0 = {}\n",             0            );
+    print("(0 + 1) % len = {}\n", (0 + 1) % len);
+    
+    let neighborhood = (
+        initial_cells.get((0 - 1) % len),
+        initial_cells.get(0),
+        initial_cells.get((0 + 1) % len)
+    );
+    
+    print("neighborhood.0 = {}\n", neighborhood.v0);
+    print("neighborhood.1 = {}\n", neighborhood.v1);
+    print("neighborhood.2 = {}\n", neighborhood.v2);
+}
