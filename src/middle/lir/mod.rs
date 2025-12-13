@@ -108,7 +108,9 @@ pub enum Type {
     Integer(IntegerWidth),
     Float(FloatWidth),
     Pointer,
+    // TODO: investigate whether this is reallt needed as a type? (all regs are pointers for now)
     Struct(Struct),
+    // TODO: investigate whether this is reallt needed as a type?
     Array(Rc<Type>, usize),
 }
 

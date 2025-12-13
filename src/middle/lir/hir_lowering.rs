@@ -10,7 +10,13 @@ use crate::{
         intern::InternedSymbol,
     },
     index::{Index, IndexVec},
-    middle::{hir, lir, primitive::UIntKind, ty, type_check::ModuleTypeCheckResults},
+    middle::{
+        hir,
+        lir::{self, RegisterId},
+        primitive::UIntKind,
+        ty,
+        type_check::ModuleTypeCheckResults,
+    },
 };
 
 struct BodyLoweringContext<'hir> {
@@ -32,6 +38,11 @@ struct BodyLoweringContext<'hir> {
 
     block_map: IndexVec<lir::BlockId, lir::Block>,
     block_stack: VecDeque<lir::BlockId>,
+
+    /// If we are lowering an expression where the destination is known (like a
+    /// let sms initializer), we use this destination instead of allocating a
+    /// new temporary register to avoid unnecessary copying.
+    destination_register: Option<lir::RegisterId>,
 }
 
 impl<'hir> BodyLoweringContext<'hir> {
@@ -41,9 +52,13 @@ impl<'hir> BodyLoweringContext<'hir> {
         prev
     }
 
+    #[track_caller]
     fn create_register(&mut self, ty: ty::Type) -> lir::RegisterId {
         let id = self.register_map.next_index();
-        let ty = self.lower_type(ty);
+        let ty = self.lower_type_indirect(ty);
+
+        assert!(!matches!(ty, lir::Type::Struct(_)));
+
         self.register_map.push(lir::Register { id, ty })
     }
 
@@ -66,6 +81,10 @@ impl<'hir> BodyLoweringContext<'hir> {
         self.block_map[*current_block]
             .instructions
             .push(instruction);
+    }
+
+    fn push_comment(&mut self, comment: impl Into<String>) {
+        self.push_instruction(lir::Instruction::Comment(comment.into()));
     }
 
     fn into_output(self) -> lir::FunctionDefinition {
@@ -107,11 +126,13 @@ impl<'hir> BodyLoweringContext<'hir> {
         }
     }
 
-    fn lower_type_for_load(&mut self, ty: ty::Type) -> lir::Type {
+    /// Lowers types for indirect usage (aggregates become pointers)
+    fn lower_type_indirect(&mut self, ty: ty::Type) -> lir::Type {
         match &*ty {
             ty::TypeKind::Str
             | ty::TypeKind::Slice(_)
             | ty::TypeKind::Array { .. }
+            | ty::TypeKind::Struct { .. }
             | ty::TypeKind::Tuple(_) => lir::Type::Pointer,
             _ => self.lower_type(ty),
         }
@@ -131,11 +152,15 @@ impl<'hir> BodyLoweringContext<'hir> {
 
         /* Create the struct on the stack */
 
-        let struct_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+        let struct_ptr_reg = self.destination_register.unwrap_or_else(|| {
+            let reg = self.create_register_with_lir_type(lir::Type::Pointer);
 
-        self.push_instruction(lir::Instruction::AllocStack {
-            destination: struct_ptr_reg,
-            ty: lir::Type::Struct(lir::Struct::slice()),
+            self.push_instruction(lir::Instruction::AllocStack {
+                destination: reg,
+                ty: lir::Type::Struct(lir::Struct::slice()),
+            });
+
+            reg
         });
 
         /* Set the pointer field */
@@ -274,7 +299,7 @@ impl<'hir> BodyLoweringContext<'hir> {
                     .iter()
                     .enumerate()
                     .map(|(i, ty)| {
-                        let reg_ty = self.lower_type_for_load(ty.clone());
+                        let reg_ty = self.lower_type_indirect(ty.clone());
 
                         // Load element from LHS tuple
 
@@ -321,6 +346,8 @@ impl<'hir> BodyLoweringContext<'hir> {
                     })
                     .collect::<Vec<_>>();
 
+                assert!(matches!(operator, BinaryOperatorKind::Equals | BinaryOperatorKind::NotEquals));
+
                 // Make sure that all sub-elements compared equal
 
                 self.push_instruction(lir::Instruction::Move {
@@ -330,12 +357,14 @@ impl<'hir> BodyLoweringContext<'hir> {
 
                 for reg in destination_regs.into_iter().skip(1) {
                     self.push_instruction(lir::Instruction::BinaryOperation {
-                        operator: BinaryOperatorKind::Equals,
+                        operator: BinaryOperatorKind::LogicalAnd,
                         destination,
                         lhs: lir::Operand::Register(destination),
                         rhs: lir::Operand::Register(reg),
                     });
                 }
+
+                // make sure that all the elements are true
             }
             ty::TypeKind::Struct {
                 def_id,
@@ -393,6 +422,20 @@ impl<'hir> BodyLoweringContext<'hir> {
             });
         }
     }
+
+    fn with_destination<R>(
+        &mut self,
+        dest: Option<lir::RegisterId>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let prev = self.destination_register.take();
+        self.destination_register = dest;
+
+        let res = f(self);
+
+        self.destination_register = prev;
+        res
+    }
 }
 
 impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
@@ -417,26 +460,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
             .self_type
             .clone()
         {
-            let ty = if self_ty.is_struct() {
-                lir::Type::Pointer
-            } else {
-                self.lower_type(self_ty)
-            };
-
-            let id = self.create_register_with_lir_type(ty);
+            let id = self.create_register(self_ty);
             self.arguments.push(id);
         }
 
         for (name, ty) in body.params.iter().zip(signature.parameters.iter()) {
             let ty = self.type_map.get_type(ty.hir_id);
+            let id = self.create_register(ty);
 
-            let lir_ty = if ty.is_struct() {
-                lir::Type::Pointer
-            } else {
-                self.lower_type(ty)
-            };
-
-            let id = self.create_register_with_lir_type(lir_ty);
             self.local_to_register_map.insert(name.hir_id.local_id, id);
             self.arguments.push(id);
         }
@@ -450,8 +481,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
         if let Some(e) = implicit_return
             && let ty = self.type_map.get_type(e.hir_id)
-            && ty.is_struct()
+            && ty.is_aggregate()
         {
+            // TODO: if the return value is a local variable, dont allocate
+            // stack space for it and instead just use the sret. if the value is
+            // a temporary, also just use the sret. if the value is a struct
+            // initializer literal, use the sret (is this a unique case?). we
+            // should never need to copy here.
+
             let dest_struct_ptr_reg = self
                 .struct_return
                 .expect("functions returning a struct should have an sret set");
@@ -482,48 +519,32 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
     }
 
     fn visit_let_statement(&mut self, let_stmt: std::rc::Rc<hir::LetStatement>) {
-        self.push_instruction(lir::Instruction::Comment(format!(
-            "let {} = ...",
-            let_stmt.name.symbol
-        )));
-
-        hir::visit::walk_let_statement(self, let_stmt.clone());
+        self.push_comment(format!("let {} = ...", let_stmt.name.symbol));
 
         let ty = self.type_map.get_type(let_stmt.hir_id);
 
+        let reg = self.create_register(ty.clone());
+        self.local_to_register_map
+            .insert(let_stmt.hir_id.local_id, reg);
+
+        if ty.is_aggregate() {
+            let ty = self.lower_type(ty.clone());
+
+            self.push_instruction(lir::Instruction::AllocStack {
+                destination: reg,
+                ty: ty,
+            });
+        }
+
+        self.with_destination(Some(reg), |this| {
+            hir::visit::walk_let_statement(this, let_stmt.clone())
+        });
+
         if let Some(init) = &let_stmt.initializer {
-            let src_reg = self.expression_to_register_map[&init.hir_id.local_id];
-
-            // if the expression is a function call, we just use the destination
-            // register from that. otherwise we create a copy of the source
-
-            if !matches!(init.kind, hir::ExpressionKind::FunctionCall { .. }) {
-                let dest_reg = if ty.is_struct() {
-                    let lir_ty = self.lower_type(ty.clone());
-
-                    let dest_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                    self.push_instruction(lir::Instruction::AllocStack {
-                        destination: dest_reg,
-                        ty: lir_ty,
-                    });
-
-                    dest_reg
-                } else {
-                    self.create_register(ty.clone())
-                };
-
-                self.lower_copy(dest_reg, src_reg, ty);
-
-                self.local_to_register_map
-                    .insert(let_stmt.hir_id.local_id, dest_reg);
-            } else {
-                self.local_to_register_map
-                    .insert(let_stmt.hir_id.local_id, src_reg);
-            }
-        } else {
-            let reg = self.create_register(ty);
-            self.local_to_register_map
-                .insert(let_stmt.hir_id.local_id, reg);
+            debug_assert_eq!(
+                self.expression_to_register_map[&init.hir_id.local_id], reg,
+                "let stmt destination was not respected for expr: {init:#?}"
+            );
         }
     }
 
@@ -570,8 +591,10 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     }
                 };
 
-                let ty = self.type_map.get_type(expression.hir_id);
-                let reg = self.create_register(ty);
+                let reg = self.destination_register.unwrap_or_else(|| {
+                    let ty = self.type_map.get_type(expression.hir_id);
+                    self.create_register(ty)
+                });
 
                 self.push_instruction(lir::Instruction::Move {
                     destination: reg,
@@ -581,7 +604,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     .insert(expression.hir_id.local_id, reg);
             }
             hir::ExpressionKind::Path(path) => {
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(self.destination_register, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
 
                 if let Some(reg) = self
                     .expression_to_register_map
@@ -635,29 +660,31 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     .insert(expression.hir_id.local_id, array_ptr_reg);
             }
             hir::ExpressionKind::Tuple(expressions) => {
-                hir::visit::walk_expression(self, expression.clone());
+                let ty = self.type_map.get_type(expression.hir_id);
+                let lir::Type::Struct(structure) = self.lower_type(ty) else {
+                    unreachable!()
+                };
 
-                let structure = lir::Struct(
-                    expressions
-                        .iter()
-                        .map(|e| {
-                            let ty = self.type_map.get_type(e.hir_id);
-                            self.lower_type(ty)
-                        })
-                        .collect(),
-                );
+                /* Create a temporary if a destination was not already allocated */
 
-                /* Create the struct on the stack */
+                let struct_ptr_reg = self.destination_register.unwrap_or_else(|| {
+                    let reg = self.create_register_with_lir_type(lir::Type::Pointer);
 
-                let struct_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::AllocStack {
-                    destination: struct_ptr_reg,
-                    ty: lir::Type::Struct(structure.clone()),
+                    self.push_instruction(lir::Instruction::AllocStack {
+                        destination: reg,
+                        ty: lir::Type::Struct(structure.clone()),
+                    });
+
+                    reg
                 });
 
                 /* Set each field */
 
                 for (i, e) in expressions.iter().enumerate() {
+                    self.push_comment(format!("field {i}"));
+
+                    // get field address
+
                     let element_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
                     self.push_instruction(lir::Instruction::GetStructElementPointer {
                         destination: element_ptr_reg,
@@ -666,40 +693,62 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         index: i,
                     });
 
-                    let expr_reg = self.expression_to_register_map[&e.hir_id.local_id];
-                    self.push_instruction(lir::Instruction::StoreMem {
-                        destination: lir::Operand::Register(element_ptr_reg),
-                        source: lir::Operand::Register(expr_reg),
-                    });
+                    // compute field value
+
+                    let ty = self.type_map.get_type(e.hir_id);
+
+                    let dest_reg = if ty.is_aggregate() {
+                        element_ptr_reg
+                    } else {
+                        self.create_register(ty.clone())
+                    };
+                    self.with_destination(Some(dest_reg), |this| this.visit_expression(e.clone()));
+
+                    debug_assert_eq!(
+                        self.expression_to_register_map[&e.hir_id.local_id], dest_reg,
+                        "struct field destination was not respected for expr: {:#?}",
+                        e
+                    );
+
+                    // store field value (if we didnt pass it to the expression)
+
+                    if element_ptr_reg != dest_reg {
+                        self.push_instruction(lir::Instruction::StoreMem {
+                            destination: lir::Operand::Register(element_ptr_reg),
+                            source: lir::Operand::Register(dest_reg),
+                        });
+                    }
                 }
 
                 self.expression_to_register_map
                     .insert(expression.hir_id.local_id, struct_ptr_reg);
             }
             hir::ExpressionKind::Struct { name: _, fields } => {
-                hir::visit::walk_expression(self, expression.clone());
+                let ty = self.type_map.get_type(expression.hir_id);
+                let lir::Type::Struct(structure) = self.lower_type(ty) else {
+                    unreachable!()
+                };
 
-                let structure = lir::Struct(
-                    fields
-                        .iter()
-                        .map(|f| {
-                            let ty = self.type_map.get_type(f.hir_id);
-                            self.lower_type(ty)
-                        })
-                        .collect(),
-                );
+                /* Create a temporary if a destination was not already allocated */
 
-                /* Create the struct on the stack */
+                let struct_ptr_reg = self.destination_register.unwrap_or_else(|| {
+                    let reg = self.create_register_with_lir_type(lir::Type::Pointer);
 
-                let struct_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::AllocStack {
-                    destination: struct_ptr_reg,
-                    ty: lir::Type::Struct(structure.clone()),
+                    self.push_instruction(lir::Instruction::AllocStack {
+                        destination: reg,
+                        ty: lir::Type::Struct(structure.clone()),
+                    });
+
+                    reg
                 });
 
                 /* Set each field */
 
                 for (i, f) in fields.iter().enumerate() {
+                    self.push_comment(format!("field {i}"));
+
+                    // get field address
+
                     let element_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
                     self.push_instruction(lir::Instruction::GetStructElementPointer {
                         destination: element_ptr_reg,
@@ -708,18 +757,42 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         index: i,
                     });
 
-                    let expr_reg = self.expression_to_register_map[&f.value.hir_id.local_id];
-                    self.push_instruction(lir::Instruction::StoreMem {
-                        destination: lir::Operand::Register(element_ptr_reg),
-                        source: lir::Operand::Register(expr_reg),
+                    // compute field value
+
+                    let ty = self.type_map.get_type(f.value.hir_id);
+
+                    let dest_reg = if ty.is_aggregate() {
+                        element_ptr_reg
+                    } else {
+                        self.create_register(ty.clone())
+                    };
+                    self.with_destination(Some(dest_reg), |this| {
+                        this.visit_expression(f.value.clone())
                     });
+
+                    debug_assert_eq!(
+                        self.expression_to_register_map[&f.value.hir_id.local_id], dest_reg,
+                        "struct field destination was not respected for expr: {:#?}",
+                        f.value
+                    );
+
+                    // store field value (if we didnt pass it to the expression)
+
+                    if element_ptr_reg != dest_reg {
+                        self.push_instruction(lir::Instruction::StoreMem {
+                            destination: lir::Operand::Register(element_ptr_reg),
+                            source: lir::Operand::Register(dest_reg),
+                        });
+                    }
                 }
 
                 self.expression_to_register_map
                     .insert(expression.hir_id.local_id, struct_ptr_reg);
             }
             hir::ExpressionKind::Block(block) => {
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(self.destination_register, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
 
                 if let Some(reg) = self.expression_to_register_map.get(&block.hir_id.local_id) {
                     self.expression_to_register_map
@@ -752,12 +825,12 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     operator: UnaryOperatorKind::Deref,
                     operand,
                 } = &target.kind
-                    && target_ty.is_struct()
+                    && target_ty.is_aggregate()
                 {
                     target = operand;
                 }
 
-                self.visit_expression(target.clone());
+                self.with_destination(None, |this| this.visit_expression(target.clone()));
 
                 let target_reg = self.expression_to_register_map[&target.hir_id.local_id];
 
@@ -787,7 +860,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             ty: structure_ty,
                             index: field_index,
                         });
-                        let field_reg = self.create_register_with_lir_type(field_ty);
+                        let field_reg = self
+                            .destination_register
+                            .unwrap_or_else(|| self.create_register_with_lir_type(field_ty));
                         self.push_instruction(lir::Instruction::LoadMem {
                             destination: field_reg,
                             source: lir::Operand::Register(field_ptr_reg),
@@ -796,7 +871,38 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         self.expression_to_register_map
                             .insert(expression.hir_id.local_id, field_reg);
                     }
-                    ty::TypeKind::Tuple(items) => todo!(),
+                    ty::TypeKind::Tuple(items) => {
+                        let index = name
+                            .symbol
+                            .value()
+                            .strip_prefix("v")
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+
+                        let lir::Type::Struct(structure_ty) = self.lower_type(target_ty) else {
+                            unreachable!();
+                        };
+                        let field_ty = structure_ty.0[index].clone();
+
+                        let field_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                        self.push_instruction(lir::Instruction::GetStructElementPointer {
+                            destination: field_ptr_reg,
+                            source: lir::Operand::Register(target_reg),
+                            ty: structure_ty,
+                            index,
+                        });
+                        let field_reg = self
+                            .destination_register
+                            .unwrap_or_else(|| self.create_register_with_lir_type(field_ty));
+                        self.push_instruction(lir::Instruction::LoadMem {
+                            destination: field_reg,
+                            source: lir::Operand::Register(field_ptr_reg),
+                        });
+
+                        self.expression_to_register_map
+                            .insert(expression.hir_id.local_id, field_reg);
+                    }
                     ty::TypeKind::Struct {
                         def_id: _,
                         name: _,
@@ -827,7 +933,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             ty: structure_ty,
                             index: field_index,
                         });
-                        let field_reg = self.create_register_with_lir_type(field_ty);
+                        let field_reg = self
+                            .destination_register
+                            .unwrap_or_else(|| self.create_register_with_lir_type(field_ty));
                         self.push_instruction(lir::Instruction::LoadMem {
                             destination: field_reg,
                             source: lir::Operand::Register(field_ptr_reg),
@@ -840,14 +948,49 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 }
             }
             hir::ExpressionKind::FunctionCall { target, arguments } => {
-                hir::visit::walk_expression(self, target.clone());
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, target.clone())
+                });
 
                 match &target.kind {
                     hir::ExpressionKind::Path(path) => {
                         match path.resolution() {
                             hir::Resolution::Definition(hir::DefinitionKind::Function, def_id) => {
-                                for arg in arguments.iter() {
-                                    self.visit_expression(arg.clone());
+                                let mut args = Vec::with_capacity(arguments.len());
+
+                                self.push_comment("copy arguments to function");
+
+                                // allocate a destination register for all
+                                // function arguments. as we traverse the
+                                // argument nodes, if they would have allocated
+                                // a temporary, we make them use these registers
+                                // instead. for example, encountering a path
+                                // will move or copy into the register (based on
+                                // whether its a scalar or aggregate).
+                                for (i, arg) in arguments.iter().enumerate() {
+                                    self.push_comment(format!("argument {i}"));
+
+                                    let ty = self.type_map.get_type(arg.hir_id);
+                                    let reg = self.create_register(ty.clone());
+
+                                    if ty.is_aggregate() {
+                                        let ty = self.lower_type(ty);
+                                        self.push_instruction(lir::Instruction::AllocStack {
+                                            destination: reg,
+                                            ty: ty,
+                                        });
+                                    }
+
+                                    self.with_destination(Some(reg), |this| {
+                                        this.visit_expression(arg.clone())
+                                    });
+
+                                    debug_assert_eq!(
+                                        self.expression_to_register_map[&arg.hir_id.local_id], reg,
+                                        "function arg destination was not respected for expr: {arg:#?}"
+                                    );
+
+                                    args.push(reg);
                                 }
 
                                 let hir::ItemKind::Function {
@@ -869,69 +1012,33 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     .map(|ty| self.type_map.get_type(ty.hir_id));
 
                                 let destination_reg = return_ty.clone().map(|ty| {
-                                    let lir_ty = if ty.is_struct() {
-                                        lir::Type::Pointer
-                                    } else {
-                                        self.lower_type(ty)
-                                    };
-                                    self.create_register_with_lir_type(lir_ty)
+                                    self.destination_register.unwrap_or_else(|| {
+                                        let reg = self.create_register(ty.clone());
+
+                                        if ty.is_aggregate() {
+                                            let ty = self.lower_type(ty);
+                                            self.push_instruction(lir::Instruction::AllocStack {
+                                                destination: reg,
+                                                ty: ty,
+                                            });
+                                        }
+
+                                        reg
+                                    })
                                 });
 
                                 let args = return_ty
                                     .clone()
                                     .zip(destination_reg)
                                     .and_then(|(ty, destination_reg)| {
-                                        if !ty.is_struct() {
+                                        if !ty.is_aggregate() {
                                             return None;
                                         }
-
-                                        let ty = self.lower_type(ty);
-
-                                        self.push_instruction(lir::Instruction::AllocStack {
-                                            destination: destination_reg,
-                                            ty: ty,
-                                        });
 
                                         Some(lir::Operand::Register(destination_reg))
                                     })
                                     .into_iter()
-                                    .chain(
-                                        arguments
-                                            .iter()
-                                            .map(|arg| {
-                                                let expr_reg = self.expression_to_register_map
-                                                    [&arg.hir_id.local_id];
-
-                                                let ty = self.type_map.get_type(arg.hir_id);
-
-                                                if ty.is_struct() {
-                                                    let lir_ty = self.lower_type(ty.clone());
-
-                                                    let copy_struct_ptr_reg = self
-                                                        .create_register_with_lir_type(
-                                                            lir::Type::Pointer,
-                                                        );
-
-                                                    self.push_instruction(
-                                                        lir::Instruction::AllocStack {
-                                                            destination: copy_struct_ptr_reg,
-                                                            ty: lir_ty,
-                                                        },
-                                                    );
-
-                                                    self.lower_copy(
-                                                        copy_struct_ptr_reg,
-                                                        expr_reg,
-                                                        ty,
-                                                    );
-
-                                                    copy_struct_ptr_reg
-                                                } else {
-                                                    expr_reg
-                                                }
-                                            })
-                                            .map(lir::Operand::Register),
-                                    )
+                                    .chain(args.into_iter().map(lir::Operand::Register))
                                     .collect();
 
                                 // returning a struct:
@@ -962,7 +1069,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     // since struct returns are handled
                                     // differently
                                     destination: return_ty
-                                        .is_none_or(|ty| !ty.is_struct())
+                                        .is_none_or(|ty| !ty.is_aggregate())
                                         .then_some(destination_reg)
                                         .flatten(),
                                 });
@@ -1037,18 +1144,26 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
                                             match &*ty {
                                                 ty::TypeKind::Integer(int_kind) => {
+                                                    let width: lir::IntegerWidth =
+                                                        (*int_kind).into();
+
                                                     let dest_reg = self
                                                         .create_register_with_lir_type(
-                                                            lir::Type::Integer((*int_kind).into()),
+                                                            lir::Type::Integer(width),
                                                         );
+
+                                                    let fn_name = match width {
+                                                        lir::IntegerWidth::I8 => "__$print_i8",
+                                                        lir::IntegerWidth::I16 => "__$print_i16",
+                                                        lir::IntegerWidth::I32 => "__$print_i32",
+                                                        lir::IntegerWidth::I64 => "__$print_i64",
+                                                    };
 
                                                     self.push_instruction(
                                                         lir::Instruction::FunctionCall {
                                                             target: lir::Operand::Immediate(
                                                                 lir::Immediate::FunctionLabel(
-                                                                    InternedSymbol::new(
-                                                                        "__$print_i64_hex",
-                                                                    ),
+                                                                    InternedSymbol::new(fn_name),
                                                                 ),
                                                             ),
                                                             arguments: vec![
@@ -1064,18 +1179,26 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                                     );
                                                 }
                                                 ty::TypeKind::UnsignedInteger(uint_kind) => {
+                                                    let width: lir::IntegerWidth =
+                                                        (*uint_kind).into();
+
                                                     let dest_reg = self
                                                         .create_register_with_lir_type(
-                                                            lir::Type::Integer((*uint_kind).into()),
+                                                            lir::Type::Integer(width),
                                                         );
+
+                                                    let fn_name = match width {
+                                                        lir::IntegerWidth::I8 => "__$print_u8",
+                                                        lir::IntegerWidth::I16 => "__$print_u16",
+                                                        lir::IntegerWidth::I32 => "__$print_u32",
+                                                        lir::IntegerWidth::I64 => "__$print_u64",
+                                                    };
 
                                                     self.push_instruction(
                                                         lir::Instruction::FunctionCall {
                                                             target: lir::Operand::Immediate(
                                                                 lir::Immediate::FunctionLabel(
-                                                                    InternedSymbol::new(
-                                                                        "__$print_i64_hex",
-                                                                    ),
+                                                                    InternedSymbol::new(fn_name),
                                                                 ),
                                                             ),
                                                             arguments: vec![
@@ -1230,6 +1353,8 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             (_, ty) => unreachable!("method call on illegal type: {ty}"),
                         };
 
+                        // FIXME: handle aggregate types the same way we do in normal functions (create copies)
+
                         let args = core::iter::once(lir::Operand::Register(self_reg))
                             .chain(
                                 arguments
@@ -1248,8 +1373,20 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             .collect();
 
                         let destination_reg = signature.return_type.as_ref().map(|ty| {
-                            let ty = self.type_map.get_type(ty.hir_id);
-                            self.create_register(ty)
+                            self.destination_register.unwrap_or_else(|| {
+                                let ty = self.type_map.get_type(ty.hir_id);
+                                let reg = self.create_register(ty.clone());
+
+                                if ty.is_aggregate() {
+                                    let ty = self.lower_type(ty);
+                                    self.push_instruction(lir::Instruction::AllocStack {
+                                        destination: reg,
+                                        ty: ty,
+                                    });
+                                }
+
+                                reg
+                            })
                         });
 
                         let symbol = self.module.global_symbol_for(name);
@@ -1268,10 +1405,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 }
             }
             hir::ExpressionKind::Binary { lhs, operator, rhs } => {
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
 
                 let ty = self.type_map.get_type(expression.hir_id);
-                let dest_reg = self.create_register(ty);
+                let dest_reg = self
+                    .destination_register
+                    .unwrap_or_else(|| self.create_register(ty));
 
                 let operand_ty = self.type_map.get_type(lhs.hir_id);
 
@@ -1304,12 +1445,18 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     return;
                 }
 
+                // FIXME: coerce array address of operations into slice creation
+
                 // FIXME: create a local copy of a struct when dereferencing
 
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
 
                 let ty = self.type_map.get_type(expression.hir_id);
-                let dest_reg = self.create_register(ty);
+                let dest_reg = self
+                    .destination_register
+                    .unwrap_or_else(|| self.create_register(ty));
 
                 let operand = self.expression_to_register_map[&operand.hir_id.local_id];
 
@@ -1326,7 +1473,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 expression: castee,
                 ty: dest_ty,
             } => {
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
 
                 let src_ty = self.type_map.get_type(expression.hir_id);
                 let dest_ty = self.type_map.get_type(dest_ty.hir_id);
@@ -1334,8 +1483,18 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 let castee = self.expression_to_register_map[&castee.hir_id.local_id];
 
                 if src_ty == dest_ty {
-                    self.expression_to_register_map
-                        .insert(expression.hir_id.local_id, castee);
+                    if let Some(dest_reg) = self.destination_register {
+                        self.push_instruction(lir::Instruction::Move {
+                            destination: dest_reg,
+                            source: lir::Operand::Register(castee),
+                        });
+                        self.expression_to_register_map
+                            .insert(expression.hir_id.local_id, dest_reg);
+                    } else {
+                        self.expression_to_register_map
+                            .insert(expression.hir_id.local_id, castee);
+                    }
+
                     return;
                 }
 
@@ -1353,7 +1512,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     (src, dest) => unreachable!("src = {src:?}, dest = {dest:?}"),
                 };
 
-                let dest_reg = self.create_register(dest_ty.clone());
+                let dest_reg = self
+                    .destination_register
+                    .unwrap_or_else(|| self.create_register(dest_ty.clone()));
                 self.push_instruction(lir::Instruction::IntegerCast {
                     kind,
                     destination: dest_reg,
@@ -1368,7 +1529,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 positive,
                 negative,
             } => {
-                self.visit_expression(condition.clone());
+                self.with_destination(None, |this| this.visit_expression(condition.clone()));
                 let condition = self.expression_to_register_map[&condition.hir_id.local_id];
 
                 let ty = self.type_map.get_type(expression.hir_id);
@@ -1379,7 +1540,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // for it and set it in the context so that we know which
                 // register to put the block result in later
                 if !ty.is_unit() && !ty.is_never() {
-                    let reg = self.create_register(ty);
+                    let reg = self
+                        .destination_register
+                        .unwrap_or_else(|| self.create_register(ty));
                     destination_register = Some(reg);
 
                     self.expression_to_register_map
@@ -1404,7 +1567,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 let positive_branch_last_block: lir::BlockId;
                 {
                     self.block_stack.push_back(positive_block_id);
-                    self.visit_block(positive.clone(), hir::visit::BlockContext::Scope);
+                    self.with_destination(destination_register, |this| {
+                        this.visit_block(positive.clone(), hir::visit::BlockContext::Scope)
+                    });
                     self.block_stack.pop_back();
 
                     // the most recently created block is the block we need to
@@ -1412,18 +1577,6 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     // while visiting the subexpression, its still the current
                     // block.
                     positive_branch_last_block = lir::BlockId::new(self.block_map.len() - 1);
-
-                    // assign the destination register by inserting a move
-                    if let Some(destination) = destination_register {
-                        let source = self.expression_to_register_map[&positive.hir_id.local_id];
-
-                        self.block_map[positive_branch_last_block]
-                            .instructions
-                            .push(lir::Instruction::Move {
-                                destination,
-                                source: lir::Operand::Register(source),
-                            });
-                    }
                 }
 
                 let mut merge_block_id = self.create_block();
@@ -1436,25 +1589,15 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         .insert(current_block_id);
 
                     self.block_stack.push_back(negative_branch_block_id);
-                    self.visit_expression(n.clone());
+                    self.with_destination(destination_register, |this| {
+                        this.visit_expression(n.clone())
+                    });
                     self.block_stack.pop_back();
 
                     merge_block_id = self.create_block();
 
                     if !self.type_map.get_type(n.hir_id).is_never() {
-                        let last_inserted_block = lir::BlockId::new(self.block_map.len() - 1);
-
-                        // assign the destination register by inserting a move
-                        if let Some(destination) = destination_register {
-                            let source = self.expression_to_register_map[&n.hir_id.local_id];
-
-                            self.block_map[last_inserted_block].instructions.push(
-                                lir::Instruction::Move {
-                                    destination,
-                                    source: lir::Operand::Register(source),
-                                },
-                            );
-                        }
+                        let last_inserted_block = lir::BlockId::new(self.block_map.len() - 2);
 
                         // insert unconditional jump in the negative branch to the
                         // allocated merge block if the branch does not return
@@ -1698,7 +1841,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // fields into the pointer stored in the sret register
                 if let Some(v) = value.clone()
                     && let ty = self.type_map.get_type(v.hir_id)
-                    && ty.is_struct()
+                    && ty.is_aggregate()
                 {
                     let dest_struct_ptr_reg = self
                         .struct_return
@@ -1737,9 +1880,19 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
     fn visit_path_segment(&mut self, segment: std::rc::Rc<hir::PathSegment>) {
         match &segment.resolution {
             hir::Resolution::Local(local_id) => {
-                let reg = self.local_to_register_map[local_id];
-                self.expression_to_register_map
-                    .insert(segment.hir_id.local_id, reg);
+                let src_reg = self.local_to_register_map[local_id];
+
+                // if we have a destination register, make a copy into it
+                if let Some(dest_reg) = self.destination_register {
+                    let ty = self.type_map.get_type(segment.hir_id);
+                    self.lower_copy(dest_reg, src_reg, ty);
+
+                    self.expression_to_register_map
+                        .insert(segment.hir_id.local_id, dest_reg);
+                } else {
+                    self.expression_to_register_map
+                        .insert(segment.hir_id.local_id, src_reg);
+                }
             }
             hir::Resolution::Definition(hir::DefinitionKind::Static, def_id) => {
                 let hir::ItemKind::Static {
@@ -1760,6 +1913,11 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
                 let ty = self.type_map.get_type(ty.hir_id);
 
+                // FIXME: perform copy here if value is an aggregate type
+                if ty.is_aggregate() {
+                    todo!()
+                }
+
                 let destination_reg = self.create_register(ty);
 
                 self.push_instruction(lir::Instruction::LoadMem {
@@ -1777,7 +1935,15 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
     }
 
     fn visit_block(&mut self, block: Rc<hir::Block>, _context: hir::visit::BlockContext) {
-        hir::visit::walk_block(self, block.clone());
+        // hir::visit::walk_block(self, block.clone());
+
+        for statement in block.statements.iter() {
+            self.with_destination(None, |this| this.visit_statement(statement.clone()));
+        }
+
+        if let Some(e) = &block.expression {
+            self.visit_expression(e.clone());
+        }
 
         if let Some(e) = &block.expression {
             let ty = self.type_map.get_type(e.hir_id);
@@ -1859,6 +2025,7 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
                     block_stack: VecDeque::new(),
                     local_to_register_map: BTreeMap::new(),
                     expression_to_register_map: BTreeMap::new(),
+                    destination_register: None,
                 };
 
                 let hir::OwnerNode::Item(item) = module.get_owner(owner_id).node();
@@ -1884,6 +2051,7 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
                     block_stack: VecDeque::new(),
                     local_to_register_map: BTreeMap::new(),
                     expression_to_register_map: BTreeMap::new(),
+                    destination_register: None,
                 };
 
                 let ty = type_map.get_type(ty.hir_id);

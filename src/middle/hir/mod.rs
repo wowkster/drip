@@ -74,7 +74,13 @@ impl Module {
     /// the assembly. This symbol uses the module name and parent hierarchy to
     /// remove name conflicts from other translation units
     pub fn global_symbol_for(&self, path: &Path) -> InternedSymbol {
-        path.as_local_symbol()
+        InternedSymbol::new(&format!(
+            "{}",
+            path.segments
+                .iter()
+                .map(|s| s.identifier.symbol.value())
+                .join("$N$")
+        ))
     }
 }
 

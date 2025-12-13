@@ -124,7 +124,6 @@ impl<'a> Assembler<'a> {
     }
 
     pub fn store_operand(&mut self, destination: RegisterId, source: X86FullRegister) {
-        dbg!(destination, source);
         let ty = &self.function.registers[&destination].ty;
         let sized = source.with_size_bytes(ty.layout().size);
 
@@ -138,6 +137,14 @@ impl<'a> Assembler<'a> {
                 ));
             }
         }
+    }
+
+    /// Loads the memory address of the temporary register on the stack into the destination
+    pub fn load_register_address(&mut self, destination: X86FullRegister, source: lir::RegisterId) {
+        self.emit(format!(
+            "lea {destination}, [rbp - {}]",
+            self.stack_frame_register_offset_map[&source]
+        ));
     }
 }
 

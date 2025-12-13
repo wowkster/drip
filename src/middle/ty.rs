@@ -208,6 +208,17 @@ impl TypeKind {
         matches!(self, TypeKind::Struct { .. })
     }
 
+    pub fn is_aggregate(&self) -> bool {
+        matches!(
+            self,
+            TypeKind::Str { .. }
+                | TypeKind::Slice { .. }
+                | TypeKind::Tuple { .. }
+                | TypeKind::Struct { .. }
+                | TypeKind::Array { .. }
+        )
+    }
+
     /// Collects the list of free type variables in this type, traversing
     /// recursive inner types if necessary
     pub fn free_type_variables(&self) -> HashSet<TypeVariable> {

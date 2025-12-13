@@ -1635,7 +1635,42 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         }
                     },
                     TypeKind::Array { ty, length } => todo!(),
-                    TypeKind::Tuple(items) => todo!(),
+                    TypeKind::Tuple(items) => match (name.symbol.value(), *is_method_call) {
+                        (index, false) => {
+                            let Some(index) = index.strip_prefix("v") else {
+                                todo!("invalid field name error");
+                            };
+
+                            if !index.chars().all(|c| c.is_numeric()) {
+                                todo!("invalid field name error");
+                            }
+
+                            let Ok(index) = index.parse::<usize>() else {
+                                todo!("failed to parse field index");
+                            };
+
+                            if index >= items.len() {
+                                todo!("index out of bounds error");
+                            }
+                            
+                            self.insert_type(expression.hir_id, items[index].clone());
+                        }
+                        _ => {
+                            let err = self.type_context.get_error_type();
+                            self.insert_type(expression.hir_id, err);
+
+                            self.errors.push(TypeError {
+                                origin: TypeConstraintOrigin {
+                                    span: target.span,
+                                    kind: TypeBoundary::FieldAccess,
+                                },
+                                kind: TypeErrorKind::UnknownFieldAccess {
+                                    target: target_ty,
+                                    name: name.symbol,
+                                },
+                            });
+                        }
+                    },
                     TypeKind::Struct {
                         def_id,
                         name: _,
@@ -2033,7 +2068,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         //     hir::ExpressionKind::OperatorAssignment { operator, lhs, rhs } => {
                         //         todo!()
                         //     }
-             
+
                         //     _ => todo!()
                         // }
 

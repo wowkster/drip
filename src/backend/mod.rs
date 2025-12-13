@@ -86,14 +86,14 @@ pub fn codegen_module(
         file = assembly
     );
 
-    println!(
-        "{}",
-        assembly
-            .lines()
-            .enumerate()
-            .map(|(i, line)| format!("{:3?}: {line}", i + 1))
-            .join("\n")
-    );
+    // println!(
+    //     "{}",
+    //     assembly
+    //         .lines()
+    //         .enumerate()
+    //         .map(|(i, line)| format!("{:3?}: {line}", i + 1))
+    //         .join("\n")
+    // );
 
     // Write the assembly file to disk
     fs::write(&assembly_file_path, assembly)

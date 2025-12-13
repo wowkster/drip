@@ -30,6 +30,19 @@ impl CodeGenerator for CodeGeneratorX86_64LinuxGnu {
             })
             .join("\n");
 
+        let static_definitions = module
+            .static_definitions
+            .iter()
+            .map(|(_, definition)| {
+                format!(
+                    "alignb {}\n{}: resb {}",
+                    definition.layout.alignment.max(8),
+                    definition.symbol_name.value(),
+                    definition.layout.size
+                )
+            })
+            .join("\n");
+
         let function_bodies = module
             .function_definitions
             .values()
@@ -58,16 +71,24 @@ impl CodeGenerator for CodeGeneratorX86_64LinuxGnu {
             ; built-in functions
             {1}
 
-            ; static data
-            section .data
+            ; readonly static data
+            section .rodata
 
             ; utf-8 strings
             {2}
+
+            ; zeroed static data
+            section .bss
+            align 4096
+
+            ; definitions
+            {3}
             "#
             },
             function_bodies,
             include_str!("./x86_64-linux-gnu_core.s"),
-            static_strings
+            static_strings,
+            static_definitions,
         )
     }
 
@@ -81,6 +102,7 @@ impl CodeGenerator for CodeGeneratorX86_64LinuxGnu {
         cmd.args([
             "-f",
             "elf64",
+            "-g",
             "-o",
             output_file
                 .to_str()
@@ -98,14 +120,14 @@ impl CodeGenerator for CodeGeneratorX86_64LinuxGnu {
         input_file: &Path,
         output_file: &Path,
     ) -> std::process::Command {
-        let mut cmd = Command::new("x86_64-linux-gnu-gcc");
+        let mut cmd = Command::new("ld.lld");
 
         cmd.args([
-            "-v",
-            "-nostdlib",
-            "-ffreestanding",
-            "-Xlinker",
+            "--nostdlib",
             "-x",
+            "-g",
+            "-e",
+            "_start",
             "-o",
             output_file
                 .to_str()
@@ -187,8 +209,10 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
     } else {
         0
     };
-    
+
     for (i, arg) in function.arguments.iter().enumerate() {
+        let ty = &function.registers[&arg].ty;
+
         assembler.emit(format!(
             "; store arg {} into its stack register",
             strip_ansi_escapes::strip_str(arg.to_string())
@@ -196,7 +220,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
         assembler.emit(format!(
             "mov [rbp - {}], {}",
             stack_frame_register_offset_map[arg],
-            ARG_REGS[starting_arg_index + i],
+            ARG_REGS[starting_arg_index + i].with_size_bytes(ty.layout().size),
         ));
     }
 
@@ -251,7 +275,11 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     source,
                     ty,
                     index,
-                } => todo!(),
+                } => {
+                    assembler.load_operand(X86FullRegister::Rax, *source);
+                    assembler.emit(format!("lea rax, [rax + {}]", ty.layout().size * index));
+                    assembler.store_operand(*destination, X86FullRegister::Rax);
+                },
                 lir::Instruction::Move {
                     destination,
                     source,
@@ -271,25 +299,47 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     destination,
                     operand,
                 } => {
-                    let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
-
                     match operator {
                         UnaryOperatorKind::Deref => {
+                            let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
+
                             assembler.emit(format!("mov {sized_reg}, [{sized_reg}]"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
-                        UnaryOperatorKind::AddressOf { .. } => todo!(),
+                        UnaryOperatorKind::AddressOf { .. } => {
+                            match operand {
+                                lir::Operand::Register(reg_id) => {
+                                    assembler.load_register_address(X86FullRegister::Rax, *reg_id);
+                                }
+                                lir::Operand::Immediate(lir::Immediate::NamedStaticLabel(
+                                    label,
+                                )) => {
+                                    assembler.emit(format!("mov rax, {label}"));
+                                }
+                                lir::Operand::Immediate(immediate) => {
+                                    unreachable!("cannot take address of immediate: {immediate:?}")
+                                }
+                            }
+
+                            assembler.store_operand(*destination, X86FullRegister::Rax);
+                        }
                         UnaryOperatorKind::LogicalNot => {
+                            let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
+
                             assembler.emit("xor rcx, rcx"); // FIXME: necessary?
                             assembler.emit(format!("test {sized_reg}, {sized_reg}"));
                             assembler.emit("sete cl");
                             assembler.store_operand(*destination, X86FullRegister::Rcx);
                         }
                         UnaryOperatorKind::BitwiseNot => {
+                            let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
+
                             assembler.emit(format!("not {sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
                         UnaryOperatorKind::Negate => {
+                            let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
+
                             assembler.emit(format!("neg {sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
@@ -332,7 +382,11 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                         }
                         BinaryOperatorKind::Modulus => {
                             // TODO: signed vs unsigned div
+                            assembler.emit("xor rdx, rdx");
+                            
+                            // TODO: sized extension
                             assembler.emit("cqo");
+                            
                             assembler.emit(format!("idiv {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rdx);
                         }
@@ -367,12 +421,24 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                             assembler.emit("setge al");
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
-                        BinaryOperatorKind::LogicalAnd => todo!(),
+                        BinaryOperatorKind::LogicalAnd => {
+                            assembler.emit(format!("test {lhs_sized_reg}, {lhs_sized_reg}"));
+                            assembler.emit(format!("setnz {lhs_sized_reg}"));
+                            
+                            assembler.emit(format!("test {rhs_sized_reg}, {rhs_sized_reg}"));
+                            assembler.emit(format!("setnz {rhs_sized_reg}"));
+                            
+                            assembler.emit(format!("and {lhs_sized_reg}, {rhs_sized_reg}"));
+                            assembler.store_operand(*destination, X86FullRegister::Rax);
+                        },
                         BinaryOperatorKind::LogicalOr => todo!(),
                         BinaryOperatorKind::BitwiseAnd => todo!(),
                         BinaryOperatorKind::BitwiseOr => todo!(),
                         BinaryOperatorKind::BitwiseXor => todo!(),
-                        BinaryOperatorKind::ShiftLeft => todo!(),
+                        BinaryOperatorKind::ShiftLeft => {
+                            assembler.emit(format!("shl {lhs_sized_reg}, {rhs_sized_reg}"));
+                            assembler.store_operand(*destination, X86FullRegister::Rax);
+                        },
                         BinaryOperatorKind::ShiftRight => todo!(),
                     }
                 }
