@@ -69,6 +69,10 @@ impl<'ast> Resolver {
             builtin_functions: BTreeSet::from([
                 InternedSymbol::new("print"),
                 InternedSymbol::new("exit"),
+                InternedSymbol::new("str"),
+                InternedSymbol::new("read"),
+                InternedSymbol::new("open"),
+                InternedSymbol::new("close"),
             ]),
             next_def_id: hir::LocalDefId::new(0), // TODO: should this be reserved for the module itself?
             node_to_def_id_map: BTreeMap::new(),

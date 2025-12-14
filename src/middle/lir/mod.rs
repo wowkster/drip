@@ -227,7 +227,7 @@ pub enum Instruction {
         /// The inner type which composes the array
         ty: Type,
         /// Must be a valid index into the array (UB otherwise)
-        index: usize,
+        index: Operand,
     },
     Move {
         destination: RegisterId,

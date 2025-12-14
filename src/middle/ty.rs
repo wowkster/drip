@@ -152,7 +152,8 @@ impl TypeKind {
         // TODO: pointer arithmetic?
 
         match self {
-            TypeKind::Integer(_)
+            TypeKind::Char
+            | TypeKind::Integer(_)
             | TypeKind::UnsignedInteger(_)
             | TypeKind::Float(_)
             | TypeKind::Infer(_)
@@ -161,7 +162,6 @@ impl TypeKind {
             TypeKind::Never
             | TypeKind::Unit
             | TypeKind::Bool
-            | TypeKind::Char
             | TypeKind::Slice(_)
             | TypeKind::Str
             | TypeKind::CStr

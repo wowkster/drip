@@ -1,0 +1,89 @@
+fn main() {
+    let fd = open("examples/aoc/day-1-1.txt\0", 0, 0); // O_RDONLY
+
+    if fd < 0 {
+        print("[main] error opening file: {}\n", fd);
+        exit(1);
+    }
+
+    let mut buffer: [u8; 32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    let mut dial: i32 = 50;
+    let mut zero_count: i32 = 0;
+    
+    while true {
+        let len = read_line(fd as u32, &buffer, 32);
+
+        if len == 0 {
+            print("dial = {}\n", dial);
+            print("zero_count = {}\n", zero_count);
+            
+            close(fd as u32);
+            exit(0);
+        }
+
+        let line = str(&buffer as *u8, len);
+        let rotation = parse_line(line);
+
+        // print("{}\n", rotation);
+        
+        dial = mod(dial + rotation, 100);
+        
+        if dial == 0 {
+            zero_count = zero_count + 1;
+        }
+    }
+}
+
+fn mod(dividend: i32, divisor: i32) -> i32 {
+    (dividend % divisor + divisor) % divisor
+}
+
+/// read one charachter at a time until we find a '\n'. we read one character at
+/// a time into the provided buffer, returning the number of characters.
+fn read_line(fd: u32, buffer: *u8, len: usize) -> usize {
+    let mut count: usize = 0;
+
+    while count < len {
+        let ptr = buffer + count as *u8;
+        let bytes = read(fd, ptr, 1);
+
+        if bytes < 0 {
+            print("[read_line] error reading file: {}\n", bytes);
+            exit(1);
+        }
+
+        // EOF or EOL
+        if bytes == 0 || *ptr == b'\n' {
+            return count;
+        }
+
+        count = count + 1;
+    }
+
+    print("[read_line] reached end of buffer before finding EOL or EOF\n");
+    exit(1);
+}
+
+/// takes a string slice and parses it into an integer with a sign (L = neg, R = pos)
+fn parse_line(line: str) -> i32 {
+    let sign: i32 = if line[0] == 'L' {
+        -1
+    } else {
+        1
+    };
+
+    let mut result: u32 = 0;
+
+    let mut i = 1;
+    while i < line.len {
+        let c: char = line[i];
+        let int: u32 = (c - '0') as u32;
+
+        result = result * 10 + int;
+
+        i = i + 1;
+    }
+
+    sign * result as i32
+}

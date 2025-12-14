@@ -179,6 +179,54 @@ impl<'hir> TypeContext<'hir> {
                         is_variadic: false,
                     })
                 }
+                "str" => {
+                    let u8_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U8));
+                    let u8_ptr_ty = self.intern_type(TypeKind::Pointer(u8_ty));
+                    let usize_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
+
+                    let str_ty = self.get_primitive_type(PrimitiveKind::Str);
+
+                    self.intern_type(TypeKind::FunctionPointer {
+                        parameters: [u8_ptr_ty, usize_ty].into(),
+                        return_type: str_ty,
+                        is_variadic: false,
+                    })
+                }
+                "read" => {
+                    let u32_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U32));
+                    let u8_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U8));
+                    let u8_ptr_ty = self.intern_type(TypeKind::Pointer(u8_ty));
+                    let usize_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
+
+                    let i32_ty = self.get_primitive_type(PrimitiveKind::Int(IntKind::I32));
+
+                    self.intern_type(TypeKind::FunctionPointer {
+                        parameters: [u32_ty, u8_ptr_ty, usize_ty].into(),
+                        return_type: i32_ty,
+                        is_variadic: false,
+                    })
+                }
+                "open" => {
+                    let str_ty = self.get_primitive_type(PrimitiveKind::Str);
+                    let i32_ty = self.get_primitive_type(PrimitiveKind::Int(IntKind::I32));
+                    let u16_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U16));
+
+                    self.intern_type(TypeKind::FunctionPointer {
+                        parameters: [str_ty, i32_ty.clone(), u16_ty].into(),
+                        return_type: i32_ty,
+                        is_variadic: false,
+                    })
+                }
+                "close" => {
+                    let u32_ty = self.get_primitive_type(PrimitiveKind::UInt(UIntKind::U32));
+                    let i32_ty = self.get_primitive_type(PrimitiveKind::Int(IntKind::I32));
+
+                    self.intern_type(TypeKind::FunctionPointer {
+                        parameters: [u32_ty].into(),
+                        return_type: i32_ty,
+                        is_variadic: false,
+                    })
+                }
                 name => unreachable!("unknown intrinsic function `{name}`"),
             },
             r => unreachable!("encountered value resolution in type namespace: {r:?}"),
@@ -282,6 +330,7 @@ impl<'hir> TypeContext<'hir> {
                 TypeBoundary::StructInitializer => format!(
                  "field type {actual} does not match the expected type {expected}"
                 ),
+                TypeBoundary::Subscript => format!("expected subscript index to be {expected} but found {actual}"),
                 TypeBoundary::FieldAccess
                 | TypeBoundary::FunctionCall
                 | TypeBoundary::Deref
@@ -306,6 +355,9 @@ impl<'hir> TypeContext<'hir> {
                 }
                 TypeUsage::FunctionCall => {
                     format!("cannot use type {provided} as the target of a function call")
+                }
+                TypeUsage::Subscript => {
+                    format!("type {provided} cannot be indexed")
                 }
                 TypeUsage::Deref => {
                     format!("type {provided} cannot be dereferenced")
@@ -503,6 +555,8 @@ enum TypeBoundary {
     FieldAccess,
     /// Function arguments must match the expected number
     FunctionCall,
+    /// Subscript targets must be indexable and the index must be a usize
+    Subscript,
     /// Function argument type must match function parameter type
     FunctionArgument,
     /// Cast operand must match target type
@@ -714,6 +768,27 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
                 }
 
                 substitution_map.insert(*variable, ty);
+
+                Ok(())
+            }
+
+            // array pointer can be coerced to raw pointers to the inner type
+            (TypeKind::Pointer(left), TypeKind::Pointer(right))
+                if matches!(&**right, TypeKind::Array { .. }) =>
+            {
+                let TypeKind::Array { ty: right, .. } = &**right else {
+                    unreachable!()
+                };
+
+                if self
+                    .unify(left.clone(), right.clone(), substitution_map)
+                    .is_err()
+                {
+                    return Err(TypeErrorKind::TypeMismatch {
+                        expected: t1,
+                        actual: t2,
+                    });
+                }
 
                 Ok(())
             }
@@ -1193,6 +1268,7 @@ enum TypeUsage {
     LogicalOperation,
     FieldAccess,
     FunctionCall,
+    Subscript,
     Deref,
 }
 
@@ -1652,7 +1728,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             if index >= items.len() {
                                 todo!("index out of bounds error");
                             }
-                            
+
                             self.insert_type(expression.hir_id, items[index].clone());
                         }
                         _ => {
@@ -1841,6 +1917,55 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         },
                     );
                 }
+            }
+            hir::ExpressionKind::Subscript { target, index } => {
+                let target_ty = self.get_type(target.hir_id);
+                let index_ty = self.get_type(index.hir_id);
+
+                // target must be indexable, and index must be a usize
+
+                match &*target_ty {
+                    TypeKind::Str | TypeKind::CStr => {
+                        let char_ty = self.type_context.intern_type(TypeKind::Char);
+                        self.insert_type(expression.hir_id, char_ty);
+                    }
+                    TypeKind::Pointer(ty)
+                    | TypeKind::Slice(ty)
+                    | TypeKind::Array { ty, length: _ } => {
+                        self.insert_type(expression.hir_id, ty.clone());
+                    }
+                    TypeKind::Tuple(items) => todo!("index fields of tuple"),
+                    TypeKind::Any => todo!("custom error for indexing an any ptr"),
+                    _ => {
+                        let err = self.type_context.get_error_type();
+                        self.insert_type(expression.hir_id, err);
+
+                        self.errors.push(TypeError {
+                            origin: TypeConstraintOrigin {
+                                span: target.span,
+                                kind: TypeBoundary::Subscript,
+                            },
+                            kind: TypeErrorKind::InvalidOperation {
+                                attempted_usage: TypeUsage::Subscript,
+                                provided: target_ty.clone(),
+                            },
+                        });
+                        return;
+                    }
+                }
+
+                let usize_ty = self
+                    .type_context
+                    .get_primitive_type(PrimitiveKind::UInt(UIntKind::USize));
+
+                self.add_equality_constraint(
+                    index_ty.clone(),
+                    usize_ty,
+                    TypeConstraintOrigin {
+                        span: index.span,
+                        kind: TypeBoundary::Subscript,
+                    },
+                );
             }
             hir::ExpressionKind::Binary { lhs, operator, rhs } => {
                 let lhs_ty = self.get_type(lhs.hir_id);
@@ -2124,6 +2249,11 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             } => {
                 let castee_ty = self.get_type(castee.hir_id);
                 let target_ty = self.get_type(ty.hir_id);
+
+                if castee_ty.is_error() {
+                    self.insert_type(expression.hir_id, target_ty);
+                    return;
+                }
 
                 // We know that the target type cannot have any free type
                 // variables because it can only be a named concrete type. This

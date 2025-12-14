@@ -76,7 +76,6 @@ fn Int32Vec::get(*self, index: usize) -> i32 {
     *((*self).ptr + (index * 4))
 }
 
-
 fn Int32Vec::push(*mut self, value: i32) {
     // regrow to 2x cap
     if (*self).len == (*self).capacity {

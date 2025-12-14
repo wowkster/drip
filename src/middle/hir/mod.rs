@@ -393,6 +393,10 @@ pub enum ExpressionKind {
         target: Rc<Expression>,
         arguments: Rc<[Rc<Expression>]>,
     },
+    Subscript {
+        target: Rc<Expression>,
+        index: Rc<Expression>,
+    },
     Binary {
         lhs: Rc<Expression>,
         operator: BinaryOperatorKind,

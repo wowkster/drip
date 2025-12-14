@@ -287,7 +287,11 @@ pub fn walk_expression(visitor: &mut impl Visitor, expression: Rc<Expression>) {
                 .for_each(|f| visitor.visit_struct_initializer_field(f.clone()));
         }
         ExpressionKind::Block(block) => visitor.visit_block(block.clone(), BlockContext::Scope),
-        ExpressionKind::FieldAccess { target, name, is_method_call: _ } => {
+        ExpressionKind::FieldAccess {
+            target,
+            name,
+            is_method_call: _,
+        } => {
             visitor.visit_expression(target.clone());
             visitor.visit_identifier(name);
         }
@@ -297,6 +301,10 @@ pub fn walk_expression(visitor: &mut impl Visitor, expression: Rc<Expression>) {
             for arg in arguments.iter() {
                 visitor.visit_expression(arg.clone());
             }
+        }
+        ExpressionKind::Subscript { target, index } => {
+            visitor.visit_expression(target.clone());
+            visitor.visit_expression(index.clone());
         }
         ExpressionKind::Binary { lhs, rhs, .. } => {
             visitor.visit_expression(lhs.clone());

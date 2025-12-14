@@ -8,10 +8,7 @@ use std::{collections::BTreeMap, panic::Location, rc::Rc};
 use colored::Colorize;
 
 use crate::{
-    frontend::{
-        ast::{self, SelfParameter},
-        lexer::Span,
-    },
+    frontend::{ast, lexer::Span},
     index::{Index, IndexVec},
     middle::{
         hir::{self, visit::Visitor},
@@ -571,6 +568,10 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     arguments: self.lower_function_call_argument_list(arguments),
                 }
             }
+            ast::ExpressionKind::Subscript { target, index } => hir::ExpressionKind::Subscript {
+                target: self.lower_expression(target),
+                index: self.lower_expression(index),
+            },
             ast::ExpressionKind::Binary { lhs, operator, rhs } => hir::ExpressionKind::Binary {
                 lhs: self.lower_expression(lhs),
                 operator: operator.kind,
@@ -642,11 +643,22 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                 let v = &value[2..value.len() - 1];
 
-                assert_eq!(v.chars().count(), 1);
-                hir::Literal::Integer(
-                    value.chars().next().unwrap() as _,
-                    hir::LiteralIntegerKind::Unsigned(UIntKind::U8),
-                )
+                let b = match v.chars().count() {
+                    1 => v.as_bytes()[0],
+                    2 => {
+                        assert_eq!(v.as_bytes()[0], b'\\');
+
+                        match v.as_bytes()[1] {
+                            b'n' => b'\n',
+                            b'r' => b'\r',
+                            b'0' => b'\0',
+                            _ => todo!(),
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+
+                hir::Literal::Integer(b as _, hir::LiteralIntegerKind::Unsigned(UIntKind::U8))
             }
             ast::LiteralKind::Char => {
                 // TODO: parse escaped chars like '\n' which may be multiple
@@ -654,8 +666,24 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                 let v = &value[1..value.len() - 1];
 
-                assert_eq!(v.chars().count(), 1);
-                hir::Literal::Char(value.chars().next().unwrap())
+                let c = match v.chars().count() {
+                    1 => v.chars().next().unwrap(),
+                    2 => {
+                        assert_eq!(v.as_bytes()[0], b'\\');
+
+                        let b = match v.as_bytes()[1] {
+                            b'n' => '\n',
+                            b'r' => '\r',
+                            b'0' => '\0',
+                            _ => todo!(),
+                        };
+
+                        b as _
+                    }
+                    _ => unreachable!(),
+                };
+
+                hir::Literal::Char(c)
             }
             ast::LiteralKind::Integer => {
                 let value = value

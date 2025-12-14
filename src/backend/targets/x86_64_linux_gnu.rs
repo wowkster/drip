@@ -145,7 +145,7 @@ fn format_nasm_string(string: &str) -> String {
     let mut parts = Vec::new();
 
     let mut last = 0;
-    for (index, matched) in string.match_indices(['\n', '\r']) {
+    for (index, matched) in string.match_indices(['\n', '\r', '\0']) {
         if last != index {
             parts.push(format!("\"{}\"", &string[last..index]));
         }
@@ -168,7 +168,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
         X86FullRegister::Rdi,
         X86FullRegister::Rsi,
         X86FullRegister::Rdx,
-        X86FullRegister::Rcx,
+        X86FullRegister::R10,
         X86FullRegister::R8,
         X86FullRegister::R9,
     ];
@@ -223,6 +223,8 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
             ARG_REGS[starting_arg_index + i].with_size_bytes(ty.layout().size),
         ));
     }
+    
+    // TODO: move arguments passed on the stack into local registers
 
     /* Intermediate Blocks */
 
@@ -277,9 +279,11 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     index,
                 } => {
                     assembler.load_operand(X86FullRegister::Rax, *source);
-                    assembler.emit(format!("lea rax, [rax + {}]", ty.layout().size * index));
+                    assembler.load_operand(X86FullRegister::Rbx, *index);
+                    assembler.emit(format!("mul rbx, {}", ty.layout().size));
+                    assembler.emit("lea rax, [rax + rbx]");
                     assembler.store_operand(*destination, X86FullRegister::Rax);
-                },
+                }
                 lir::Instruction::Move {
                     destination,
                     source,
@@ -376,17 +380,32 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                         }
                         BinaryOperatorKind::Divide => {
                             // TODO: signed vs unsigned div
-                            assembler.emit("cqo");
+
+                            let size = function.registers[destination].ty.layout().size;
+
+                            match size {
+                                2 => assembler.emit("cwd"),
+                                4 => assembler.emit("cdq"),
+                                8 => assembler.emit("cqo"),
+                                _ => unreachable!(),
+                            }
+
                             assembler.emit(format!("idiv {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
                         BinaryOperatorKind::Modulus => {
                             // TODO: signed vs unsigned div
                             assembler.emit("xor rdx, rdx");
-                            
-                            // TODO: sized extension
-                            assembler.emit("cqo");
-                            
+
+                            let size = function.registers[destination].ty.layout().size;
+
+                            match size {
+                                2 => assembler.emit("cwd"),
+                                4 => assembler.emit("cdq"),
+                                8 => assembler.emit("cqo"),
+                                _ => unreachable!(),
+                            }
+
                             assembler.emit(format!("idiv {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rdx);
                         }
@@ -424,21 +443,30 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                         BinaryOperatorKind::LogicalAnd => {
                             assembler.emit(format!("test {lhs_sized_reg}, {lhs_sized_reg}"));
                             assembler.emit(format!("setnz {lhs_sized_reg}"));
-                            
+
                             assembler.emit(format!("test {rhs_sized_reg}, {rhs_sized_reg}"));
                             assembler.emit(format!("setnz {rhs_sized_reg}"));
-                            
+
                             assembler.emit(format!("and {lhs_sized_reg}, {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
+                        }
+                        BinaryOperatorKind::LogicalOr => {
+                            assembler.emit(format!("test {lhs_sized_reg}, {lhs_sized_reg}"));
+                            assembler.emit(format!("setnz {lhs_sized_reg}"));
+
+                            assembler.emit(format!("test {rhs_sized_reg}, {rhs_sized_reg}"));
+                            assembler.emit(format!("setnz {rhs_sized_reg}"));
+
+                            assembler.emit(format!("or {lhs_sized_reg}, {rhs_sized_reg}"));
+                            assembler.store_operand(*destination, X86FullRegister::Rax);
                         },
-                        BinaryOperatorKind::LogicalOr => todo!(),
                         BinaryOperatorKind::BitwiseAnd => todo!(),
                         BinaryOperatorKind::BitwiseOr => todo!(),
                         BinaryOperatorKind::BitwiseXor => todo!(),
                         BinaryOperatorKind::ShiftLeft => {
                             assembler.emit(format!("shl {lhs_sized_reg}, {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
-                        },
+                        }
                         BinaryOperatorKind::ShiftRight => todo!(),
                     }
                 }

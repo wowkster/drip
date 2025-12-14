@@ -250,6 +250,10 @@ pub enum ExpressionKind {
         target: Box<Expression>,
         arguments: Box<FunctionCallArgumentList>,
     },
+    Subscript {
+        target: Box<Expression>,
+        index: Box<Expression>,
+    },
     Binary {
         lhs: Box<Expression>,
         operator: BinaryOperator,

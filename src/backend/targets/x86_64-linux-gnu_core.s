@@ -430,19 +430,58 @@ __$print_u32:
 
     
 __$syscall_1:
-    ; TODO
+    mov rax, rdi ; syscall #
+    mov rdi, rsi ; arg0
+    syscall
+    
+    ret
 
 __$syscall_2:
-    ; TODO
+    mov rax, rdi ; syscall #
+    mov rdi, rsi ; arg0
+    mov rsi, rdx ; arg1
+    syscall
+    
+    ret
 
 __$syscall_3:
-    ; TODO
+    mov rax, rdi ; syscall #
+    mov rdi, rsi ; arg0
+    mov rsi, rdx ; arg1
+    mov rdx, r10 ; arg2
+    syscall
+    
+    ret
 
 __$syscall_4:
-    ; TODO
+    mov rax, rdi ; syscall #
+    mov rdi, rsi ; arg0
+    mov rsi, rdx ; arg1
+    mov rdx, r10 ; arg2
+    mov r10, r8  ; arg3
+    syscall
+    
+    ret
 
 __$syscall_5:
-    ; TODO
+    mov rax, rdi ; syscall #
+    mov rdi, rsi ; arg0
+    mov rsi, rdx ; arg1
+    mov rdx, r10 ; arg2
+    mov r10, r8  ; arg3
+    mov r8, r9   ; arg4
+    syscall
+    
+    ret
 
 __$syscall_6:
-    ; TODO
+    mov rax, rdi      ; syscall #
+    mov rdi, rsi      ; arg0
+    mov rsi, rdx      ; arg1
+    mov rdx, r10      ; arg2
+    mov r10, r8       ; arg3
+    mov r8, r9        ; arg4
+    mov r9, [rbp + 8] ; arg5 (TODO: is this right?)
+    syscall
+    
+    ret

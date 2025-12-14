@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     collections::{BTreeMap, BTreeSet, VecDeque},
     rc::Rc,
 };
@@ -346,7 +345,10 @@ impl<'hir> BodyLoweringContext<'hir> {
                     })
                     .collect::<Vec<_>>();
 
-                assert!(matches!(operator, BinaryOperatorKind::Equals | BinaryOperatorKind::NotEquals));
+                assert!(matches!(
+                    operator,
+                    BinaryOperatorKind::Equals | BinaryOperatorKind::NotEquals
+                ));
 
                 // Make sure that all sub-elements compared equal
 
@@ -625,7 +627,9 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 todo!()
             }
             hir::ExpressionKind::Array(hir::ArrayInitializer::Specific(values)) => {
-                hir::visit::walk_expression(self, expression.clone());
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, expression.clone());
+                });
 
                 let array_ty = self.lower_type(self.type_map.get_type(expression.hir_id));
                 let lir::Type::Array(inner_ty, length) = array_ty.clone() else {
@@ -634,10 +638,14 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
                 assert_eq!(length, values.len());
 
-                let array_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::AllocStack {
-                    destination: array_ptr_reg,
-                    ty: array_ty,
+                let array_ptr_reg = self.destination_register.unwrap_or_else(|| {
+                    let array_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                    self.push_instruction(lir::Instruction::AllocStack {
+                        destination: array_ptr_reg,
+                        ty: array_ty,
+                    });
+
+                    array_ptr_reg
                 });
 
                 for (i, e) in values.iter().enumerate() {
@@ -646,7 +654,10 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         destination: element_ptr_reg,
                         source: lir::Operand::Register(array_ptr_reg),
                         ty: inner_ty.as_ref().clone(),
-                        index: i,
+                        index: lir::Operand::Immediate(lir::Immediate::Int(
+                            i as _,
+                            lir::IntegerWidth::I64,
+                        )),
                     });
 
                     let expr_reg = self.expression_to_register_map[&e.hir_id.local_id];
@@ -1246,6 +1257,61 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     }
                                 }
                             }
+                            hir::Resolution::IntrinsicFunction(name) if name.value() == "str" => {
+                                self.with_destination(None, |this| {
+                                    this.visit_expression(arguments[0].clone());
+                                    this.visit_expression(arguments[1].clone());
+                                });
+
+                                let ptr_reg =
+                                    self.expression_to_register_map[&arguments[0].hir_id.local_id];
+                                let len_reg =
+                                    self.expression_to_register_map[&arguments[1].hir_id.local_id];
+
+                                let destination_reg =
+                                    self.destination_register.unwrap_or_else(|| {
+                                        let destination =
+                                            self.create_register_with_lir_type(lir::Type::Pointer);
+
+                                        self.push_instruction(lir::Instruction::AllocStack {
+                                            destination,
+                                            ty: lir::Type::Struct(lir::Struct::slice()),
+                                        });
+
+                                        destination
+                                    });
+
+                                let ptr_ptr_reg =
+                                    self.create_register_with_lir_type(lir::Type::Pointer);
+                                let len_ptr_reg = self.create_register_with_lir_type(
+                                    lir::Type::Integer(lir::IntegerWidth::I64),
+                                );
+
+                                self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                    destination: ptr_ptr_reg,
+                                    source: lir::Operand::Register(destination_reg),
+                                    ty: lir::Struct::slice(),
+                                    index: 0,
+                                });
+                                self.push_instruction(lir::Instruction::StoreMem {
+                                    destination: lir::Operand::Register(ptr_ptr_reg),
+                                    source: lir::Operand::Register(ptr_reg),
+                                });
+
+                                self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                    destination: len_ptr_reg,
+                                    source: lir::Operand::Register(destination_reg),
+                                    ty: lir::Struct::slice(),
+                                    index: 1,
+                                });
+                                self.push_instruction(lir::Instruction::StoreMem {
+                                    destination: lir::Operand::Register(len_ptr_reg),
+                                    source: lir::Operand::Register(len_reg),
+                                });
+
+                                self.expression_to_register_map
+                                    .insert(expression.hir_id.local_id, destination_reg);
+                            }
                             hir::Resolution::IntrinsicFunction(name) if name.value() == "exit" => {
                                 self.visit_expression(arguments[0].clone());
 
@@ -1259,6 +1325,145 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     arguments: vec![lir::Operand::Register(arg_reg)],
                                     destination: None,
                                 });
+                            }
+                            hir::Resolution::IntrinsicFunction(name) if name.value() == "read" => {
+                                for arg in arguments.iter() {
+                                    self.with_destination(None, |this| {
+                                        this.visit_expression(arg.clone())
+                                    });
+                                }
+
+                                let mut argument_operands = vec![lir::Operand::Immediate(
+                                    lir::Immediate::Int(0, lir::IntegerWidth::I64),
+                                )];
+
+                                for arg in arguments.iter() {
+                                    argument_operands.push(lir::Operand::Register(
+                                        self.expression_to_register_map[&arg.hir_id.local_id],
+                                    ));
+                                }
+
+                                let destination_reg =
+                                    self.destination_register.unwrap_or_else(|| {
+                                        self.create_register_with_lir_type(lir::Type::Integer(
+                                            lir::IntegerWidth::I64,
+                                        ))
+                                    });
+
+                                self.push_instruction(lir::Instruction::FunctionCall {
+                                    target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(
+                                        InternedSymbol::new("__$syscall_3"),
+                                    )),
+                                    arguments: argument_operands,
+                                    destination: Some(destination_reg),
+                                });
+
+                                self.expression_to_register_map
+                                    .insert(expression.hir_id.local_id, destination_reg);
+                            }
+                            hir::Resolution::IntrinsicFunction(name) if name.value() == "open" => {
+                                let mut args = Vec::with_capacity(arguments.len());
+
+                                for arg in arguments.iter() {
+                                    let ty = self.type_map.get_type(arg.hir_id);
+                                    let reg = self.create_register(ty.clone());
+
+                                    if ty.is_aggregate() {
+                                        let ty = self.lower_type(ty);
+                                        self.push_instruction(lir::Instruction::AllocStack {
+                                            destination: reg,
+                                            ty: ty,
+                                        });
+                                    }
+
+                                    self.with_destination(Some(reg), |this| {
+                                        this.visit_expression(arg.clone())
+                                    });
+
+                                    debug_assert_eq!(
+                                        self.expression_to_register_map[&arg.hir_id.local_id], reg,
+                                        "function arg destination was not respected for expr: {arg:#?}"
+                                    );
+
+                                    args.push(reg);
+                                }
+
+                                let mut argument_operands = vec![lir::Operand::Immediate(
+                                    lir::Immediate::Int(2, lir::IntegerWidth::I64),
+                                )];
+
+                                let ptr_ptr_reg =
+                                    self.create_register_with_lir_type(lir::Type::Pointer);
+
+                                self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                    destination: ptr_ptr_reg,
+                                    source: lir::Operand::Register(args[0]),
+                                    ty: lir::Struct::slice(),
+                                    index: 0,
+                                });
+
+                                let ptr_reg =
+                                    self.create_register_with_lir_type(lir::Type::Pointer);
+
+                                self.push_instruction(lir::Instruction::LoadMem {
+                                    destination: ptr_reg,
+                                    source: lir::Operand::Register(ptr_ptr_reg),
+                                });
+
+                                argument_operands.push(lir::Operand::Register(ptr_reg)); // ptr
+                                argument_operands.push(lir::Operand::Register(args[1])); // flags
+                                argument_operands.push(lir::Operand::Register(args[2])); // mode
+
+                                let destination_reg =
+                                    self.destination_register.unwrap_or_else(|| {
+                                        self.create_register_with_lir_type(lir::Type::Integer(
+                                            lir::IntegerWidth::I32,
+                                        ))
+                                    });
+
+                                self.push_instruction(lir::Instruction::FunctionCall {
+                                    target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(
+                                        InternedSymbol::new("__$syscall_3"),
+                                    )),
+                                    arguments: argument_operands,
+                                    destination: Some(destination_reg),
+                                });
+
+                                self.expression_to_register_map
+                                    .insert(expression.hir_id.local_id, destination_reg);
+                            }
+                            hir::Resolution::IntrinsicFunction(name) if name.value() == "close" => {
+                                for arg in arguments.iter() {
+                                    self.visit_expression(arg.clone());
+                                }
+
+                                let mut argument_operands = vec![lir::Operand::Immediate(
+                                    lir::Immediate::Int(3, lir::IntegerWidth::I64),
+                                )];
+
+                                for arg in arguments.iter() {
+                                    argument_operands.push(lir::Operand::Register(
+                                        self.expression_to_register_map[&arg.hir_id.local_id],
+                                    ));
+                                }
+
+                                let destination_reg =
+                                    self.destination_register.unwrap_or_else(|| {
+                                        self.create_register_with_lir_type(lir::Type::Integer(
+                                            lir::IntegerWidth::I32,
+                                        ))
+                                    });
+
+                                self.push_instruction(lir::Instruction::FunctionCall {
+                                    target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(
+                                        InternedSymbol::new("__$syscall_1"),
+                                    )),
+                                    arguments: argument_operands,
+                                    destination: Some(destination_reg),
+                                });
+
+                                self.expression_to_register_map
+                                    .insert(expression.hir_id.local_id, destination_reg);
                             }
                             hir::Resolution::IntrinsicFunction(name) => {
                                 todo!("lower intrinsic function: {}", name.value())
@@ -1403,6 +1608,85 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     }
                     _ => todo!("lower function pointer calls"),
                 }
+            }
+            hir::ExpressionKind::Subscript { target, index } => {
+                self.with_destination(None, |this| {
+                    hir::visit::walk_expression(this, expression.clone())
+                });
+
+                let target_ty = self.type_map.get_type(target.hir_id);
+
+                let dest_ty = self.type_map.get_type(expression.hir_id);
+                let dest_reg = self
+                    .destination_register
+                    .unwrap_or_else(|| self.create_register(dest_ty));
+
+                let target_reg = self.expression_to_register_map[&target.hir_id.local_id];
+                let index_reg = self.expression_to_register_map[&index.hir_id.local_id];
+
+                match &*target_ty {
+                    ty::TypeKind::Str => {
+                        let ptr_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+
+                        self.push_instruction(lir::Instruction::GetStructElementPointer {
+                            destination: ptr_ptr_reg,
+                            source: lir::Operand::Register(target_reg),
+                            ty: lir::Struct::slice(),
+                            index: 0,
+                        });
+
+                        let ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+
+                        self.push_instruction(lir::Instruction::LoadMem {
+                            destination: ptr_reg,
+                            source: lir::Operand::Register(ptr_ptr_reg),
+                        });
+
+                        let elem_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+                        let u8_reg = self.create_register_with_lir_type(lir::Type::Integer(
+                            lir::IntegerWidth::I8,
+                        ));
+
+                        self.push_instruction(lir::Instruction::GetArrayElementPointer {
+                            destination: elem_ptr_reg,
+                            source: lir::Operand::Register(ptr_reg),
+                            ty: lir::Type::Integer(lir::IntegerWidth::I8),
+                            index: lir::Operand::Register(index_reg),
+                        });
+                        self.push_instruction(lir::Instruction::LoadMem {
+                            destination: u8_reg,
+                            source: lir::Operand::Register(elem_ptr_reg),
+                        });
+                        self.push_instruction(lir::Instruction::Move {
+                            destination: dest_reg,
+                            source: lir::Operand::Register(u8_reg),
+                        });
+                    }
+                    ty::TypeKind::CStr => todo!(),
+                    ty::TypeKind::Pointer(ty) => todo!(),
+                    ty::TypeKind::Slice(ty) => todo!(),
+                    ty::TypeKind::Array { ty, length } => {
+                        let elem_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
+
+                        let ty = self.lower_type(ty.clone());
+
+                        self.push_instruction(lir::Instruction::GetArrayElementPointer {
+                            destination: elem_ptr_reg,
+                            source: lir::Operand::Register(target_reg),
+                            ty,
+                            index: lir::Operand::Register(index_reg),
+                        });
+                        self.push_instruction(lir::Instruction::LoadMem {
+                            destination: dest_reg,
+                            source: lir::Operand::Register(elem_ptr_reg),
+                        });
+                    }
+                    ty::TypeKind::Tuple(items) => todo!(),
+                    _ => unreachable!(),
+                }
+
+                self.expression_to_register_map
+                    .insert(expression.hir_id.local_id, dest_reg);
             }
             hir::ExpressionKind::Binary { lhs, operator, rhs } => {
                 self.with_destination(None, |this| {

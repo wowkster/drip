@@ -1255,24 +1255,49 @@ impl<'source> Parser<'source> {
     fn parse_function_call_expression(&mut self) -> Expression {
         let mut expression = self.parse_postfix_expression();
 
-        while self
-            .expect_peek("open parenthesis, semicolon, or closing brace")
-            .kind
-            == TokenKind::OpenParen
-        {
-            let arguments = self.parse_function_call_arguments();
+        loop {
+            let peek = self
+                .expect_peek("open parenthesis, open bracket, semicolon, or closing brace")
+                .kind;
 
-            if let ExpressionKind::FieldAccess { is_method_call, .. } = &mut expression.kind {
-                *is_method_call = true;
-            }
+            match peek {
+                TokenKind::OpenParen => {
+                    let arguments = self.parse_function_call_arguments();
 
-            expression = Expression {
-                id: self.create_node_id(),
-                span: Span::new(expression.span.start, arguments.span.end),
-                kind: ExpressionKind::FunctionCall {
-                    target: Box::new(expression),
-                    arguments: Box::new(arguments),
-                },
+                    if let ExpressionKind::FieldAccess { is_method_call, .. } = &mut expression.kind
+                    {
+                        *is_method_call = true;
+                    }
+
+                    expression = Expression {
+                        id: self.create_node_id(),
+                        span: Span::new(expression.span.start, arguments.span.end),
+                        kind: ExpressionKind::FunctionCall {
+                            target: Box::new(expression),
+                            arguments: Box::new(arguments),
+                        },
+                    }
+                }
+                TokenKind::OpenBracket => {
+                    let _open_paren = self.expect_next_to_be(TokenKind::OpenBracket);
+                    let index = self.parse_expression();
+                    let close_paren = self.expect_next_to_be(TokenKind::CloseBracket);
+
+                    if let ExpressionKind::FieldAccess { is_method_call, .. } = &mut expression.kind
+                    {
+                        *is_method_call = true;
+                    }
+
+                    expression = Expression {
+                        id: self.create_node_id(),
+                        span: Span::new(expression.span.start, close_paren.span.end),
+                        kind: ExpressionKind::Subscript {
+                            target: Box::new(expression),
+                            index: Box::new(index),
+                        },
+                    }
+                }
+                _ => break,
             }
         }
 
@@ -1677,7 +1702,8 @@ impl<'source> Parser<'source> {
             LiteralKind::String => InternedSymbol::new(
                 &value[1..value.len() - 1]
                     .replace("\\n", "\n")
-                    .replace("\\r", "\r"),
+                    .replace("\\r", "\r")
+                    .replace("\\0", "\0"),
             ),
             _ => InternedSymbol::new(value),
         };

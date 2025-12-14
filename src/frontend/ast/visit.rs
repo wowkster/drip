@@ -267,6 +267,10 @@ pub fn walk_expression<'a>(visitor: &mut impl Visitor<'a>, expression: &'a Expre
             visitor.visit_expression(target);
             visitor.visit_function_call_argument_list(arguments);
         }
+        ExpressionKind::Subscript { target, index } => {
+            visitor.visit_expression(target);
+            visitor.visit_expression(index);
+        }
         ExpressionKind::Binary { lhs, rhs, .. } => {
             visitor.visit_expression(lhs);
             visitor.visit_expression(rhs);
