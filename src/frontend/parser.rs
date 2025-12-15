@@ -171,8 +171,8 @@ impl<'source> Parser<'source> {
                     kind: ItemKind::Static(static_),
                 }
             }
-            _ => self.report_fatal_error_old(&format!(
-                "Expected function definition in module but found: {} ({:?})",
+            _ => self.report_fatal_error(peeked.span, &format!(
+                "Expected item in module but found: {} ({:?})",
                 self.lexer.source().value_of_span(peeked.span),
                 peeked.kind
             )),
