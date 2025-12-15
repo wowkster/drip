@@ -1,0 +1,21 @@
+{
+    "file_types": {
+        "Rust": [
+            "*.drip"
+        ]
+    },
+    "lsp": {
+        "rust-analyzer": {
+            "initialization_options": {
+                "files": {
+                    // don't try and use rust-analyzer in drip directories
+                    "excludeDirs": [
+                        "core",
+                        "examples",
+                        "selfhost"
+                    ]
+                }
+            }
+        }
+    }
+}
