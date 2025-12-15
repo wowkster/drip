@@ -119,6 +119,7 @@ impl<'hir> BodyLoweringContext<'hir> {
                     .map(|field| self.lower_type(field.ty.clone()))
                     .collect(),
             )),
+            ty::TypeKind::Enum { .. } => lir::Type::Integer(lir::IntegerWidth::I32),
             ty::TypeKind::FunctionPointer { .. } => lir::Type::Pointer,
             ty::TypeKind::Any => lir::Type::Pointer,
             ty::TypeKind::Never | ty::TypeKind::Infer(_) | ty::TypeKind::Error => unreachable!(),
@@ -372,6 +373,10 @@ impl<'hir> BodyLoweringContext<'hir> {
                 def_id,
                 name,
                 fields,
+            } => todo!(),
+            ty::TypeKind::Enum {
+                def_id,
+                name,
             } => todo!(),
             ty::TypeKind::Never | ty::TypeKind::Infer(_) | ty::TypeKind::Error => unreachable!(),
         }
@@ -2317,7 +2322,9 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
 
                 function_definitions.insert(owner_id, ctx.into_output());
             }
-            hir::ItemKind::Struct { .. } | hir::ItemKind::TypeAlias { .. } => continue,
+            hir::ItemKind::Struct { .. }
+            | hir::ItemKind::Enum { .. }
+            | hir::ItemKind::TypeAlias { .. } => continue,
             hir::ItemKind::Static { name, ty, .. } => {
                 let mut ctx = BodyLoweringContext {
                     module,

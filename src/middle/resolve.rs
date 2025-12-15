@@ -40,6 +40,8 @@ pub struct Resolver {
 
     /// Maps methods on types to their definitions
     global_method_scopes: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
+    /// Maps enum definition ids to lists of their members
+    global_enum_member_scopes: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
 
     // Maps name references to definitions
     value_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
@@ -79,6 +81,7 @@ impl<'ast> Resolver {
             global_value_scope: BTreeMap::new(),
             global_type_scope: BTreeMap::new(),
             global_method_scopes: BTreeMap::new(),
+            global_enum_member_scopes: BTreeMap::new(),
             value_name_resolutions: BTreeMap::new(),
             type_name_resolutions: BTreeMap::new(),
         }
@@ -128,6 +131,7 @@ impl<'ast> Resolver {
     pub fn create_definition(
         &mut self,
         node_id: ast::NodeId,
+        ty_name: Option<InternedSymbol>,
         name: InternedSymbol,
         kind: hir::DefinitionKind,
     ) -> hir::LocalDefId {
@@ -139,12 +143,26 @@ impl<'ast> Resolver {
         self.node_to_def_id_map.insert(node_id, owner_id);
 
         match kind {
+            // value ns
             hir::DefinitionKind::Function
             | hir::DefinitionKind::Constant
             | hir::DefinitionKind::Static => {
                 self.global_value_scope
                     .insert(name, hir::Resolution::Definition(kind, owner_id));
             }
+            hir::DefinitionKind::AssociatedFunction => {
+                self.global_method_scopes
+                    .entry(ty_name.unwrap())
+                    .or_default()
+                    .insert(name, owner_id);
+            }
+            hir::DefinitionKind::EnumVariant => {
+                self.global_enum_member_scopes
+                    .entry(ty_name.unwrap())
+                    .or_default()
+                    .insert(name, owner_id);
+            }
+            // type ns
             hir::DefinitionKind::Struct
             | hir::DefinitionKind::Enum
             | hir::DefinitionKind::Union
@@ -155,23 +173,6 @@ impl<'ast> Resolver {
         }
 
         owner_id
-    }
-
-    pub fn create_method_definition(
-        &mut self,
-        node_id: ast::NodeId,
-        ty_name: InternedSymbol,
-        method_name: InternedSymbol,
-    ) {
-        let owner_id = self.next_def_id;
-        self.next_def_id.increment_by(1);
-
-        self.node_to_def_id_map.insert(node_id, owner_id);
-
-        self.global_method_scopes
-            .entry(ty_name)
-            .or_default()
-            .insert(method_name, owner_id);
     }
 }
 
@@ -225,6 +226,7 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
 
                         let def_id = self.resolver.create_definition(
                             item.id,
+                            None,
                             name.symbol,
                             hir::DefinitionKind::Function,
                         );
@@ -245,10 +247,11 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
                             self.report_duplicate_definition(function.signature.name.span)
                         }
 
-                        self.resolver.create_method_definition(
+                        self.resolver.create_definition(
                             item.id,
-                            ty_name.symbol,
+                            Some(ty_name.symbol),
                             method_name.symbol,
+                            hir::DefinitionKind::AssociatedFunction,
                         );
                     }
                     _ => self.report_illegal_function_name(function.signature.name.span),
@@ -265,9 +268,45 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
 
                 self.resolver.create_definition(
                     item.id,
+                    None,
                     struct_definition.name.symbol,
                     hir::DefinitionKind::Struct,
                 );
+            }
+            ast::ItemKind::EnumDefinition(enum_definition) => {
+                if self
+                    .resolver
+                    .global_type_scope
+                    .contains_key(&enum_definition.name.symbol)
+                {
+                    self.report_duplicate_definition(enum_definition.name.span)
+                }
+
+                self.resolver.create_definition(
+                    item.id,
+                    None,
+                    enum_definition.name.symbol,
+                    hir::DefinitionKind::Enum,
+                );
+
+                for member in &enum_definition.variants {
+                    if self
+                        .resolver
+                        .global_enum_member_scopes
+                        .get(&enum_definition.name.symbol)
+                        .is_some_and(|ty_scope| ty_scope.contains_key(&member.symbol))
+                    {
+                        // TODO: nicer error for duplicate enum members
+                        self.report_duplicate_definition(member.span)
+                    }
+
+                    self.resolver.create_definition(
+                        item.id,
+                        Some(enum_definition.name.symbol),
+                        member.symbol,
+                        hir::DefinitionKind::EnumVariant,
+                    );
+                }
             }
             ast::ItemKind::TypeAlias(type_alias) => {
                 if self
@@ -280,6 +319,7 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
 
                 self.resolver.create_definition(
                     item.id,
+                    None,
                     type_alias.name.symbol,
                     hir::DefinitionKind::Alias,
                 );
@@ -295,6 +335,7 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
 
                 self.resolver.create_definition(
                     item.id,
+                    None,
                     static_.name.symbol,
                     hir::DefinitionKind::Static,
                 );
@@ -524,19 +565,29 @@ impl<'res, 'ast> Visitor<'ast> for LateResolveVisitor<'res, 'ast> {
 
                     // FIXME: should this be moved into the type checker to handle type aliases?
 
-                    let Some(second_resolution) = self
+                    let res = if let Some(method_def_id) = self
                         .resolver
                         .global_method_scopes
                         .get(&first_ident.symbol)
                         .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
-                    else {
+                    {
+                        hir::Resolution::Definition(
+                            hir::DefinitionKind::AssociatedFunction,
+                            *method_def_id,
+                        )
+                    } else if let Some(variant_def_id) = self
+                        .resolver
+                        .global_enum_member_scopes
+                        .get(&first_ident.symbol)
+                        .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
+                    {
+                        hir::Resolution::Definition(
+                            hir::DefinitionKind::EnumVariant,
+                            *variant_def_id,
+                        )
+                    } else {
                         self.report_unresolved(second_ident.span);
                     };
-
-                    let res = hir::Resolution::Definition(
-                        hir::DefinitionKind::Function,
-                        *second_resolution,
-                    );
 
                     self.resolver
                         .value_name_resolutions

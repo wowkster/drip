@@ -8,7 +8,8 @@ use super::{
 };
 use crate::{
     frontend::ast::{
-        ArrayInitializer, Static, StructDefinition, StructField, StructInitializerField,
+        ArrayInitializer, EnumDefinition, Static, StructDefinition, StructField,
+        StructInitializerField,
     },
     middle::resolve::Namespace,
 };
@@ -40,6 +41,10 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_struct_field(&mut self, struct_field: &'ast StructField) {
         walk_struct_field(self, struct_field)
+    }
+
+    fn visit_enum_definition(&mut self, enum_definition: &'ast EnumDefinition) {
+        walk_enum_definition(self, enum_definition)
     }
 
     fn visit_type_alias(&mut self, type_alias: &'ast TypeAlias) {
@@ -105,6 +110,9 @@ pub fn walk_item<'a>(visitor: &mut impl Visitor<'a>, item: &'a Item) {
         ItemKind::StructDefinition(struct_definition) => {
             visitor.visit_struct_definition(struct_definition);
         }
+        ItemKind::EnumDefinition(enum_definition) => {
+            visitor.visit_enum_definition(enum_definition);
+        }
         ItemKind::TypeAlias(type_alias) => {
             visitor.visit_type_alias(type_alias);
         }
@@ -165,6 +173,17 @@ pub fn walk_struct_definition<'a>(
 pub fn walk_struct_field<'a>(visitor: &mut impl Visitor<'a>, field: &'a StructField) {
     visitor.visit_identifier(&field.name);
     visitor.visit_type(&field.ty);
+}
+
+pub fn walk_enum_definition<'a>(
+    visitor: &mut impl Visitor<'a>,
+    enum_definition: &'a EnumDefinition,
+) {
+    visitor.visit_identifier(&enum_definition.name);
+
+    for member in &enum_definition.variants {
+        visitor.visit_identifier(member);
+    }
 }
 
 pub fn walk_type_alias<'a>(visitor: &mut impl Visitor<'a>, alias: &'a TypeAlias) {

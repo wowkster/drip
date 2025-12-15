@@ -247,6 +247,11 @@ pub enum ItemKind {
         name: Identifier,
         fields: Rc<[Rc<StructField>]>,
     },
+    Enum {
+        name: Identifier,
+        /// Index in the array corresponds to the variant's value
+        variants: Rc<[Identifier]>,
+    },
     TypeAlias {
         name: Identifier,
         ty: Rc<Type>,
@@ -586,6 +591,8 @@ pub enum DefinitionKind {
     Function,
     Constant,
     Static,
+    AssociatedFunction,
+    EnumVariant,
 
     // Type namespace
     Struct,

@@ -28,13 +28,16 @@ pub trait Visitor: Sized {
     fn visit_function_parameter(&mut self, parameter: Rc<FunctionParameter>) {
         walk_function_parameter(self, parameter)
     }
-
     fn visit_struct_definition(&mut self, name: &Identifier, fields: Rc<[Rc<StructField>]>) {
         walk_struct_definition(self, name, fields)
     }
 
     fn visit_struct_field(&mut self, field: Rc<StructField>) {
         walk_struct_field(self, field)
+    }
+
+    fn visit_enum_definition(&mut self, name: &Identifier, variants: Rc<[Identifier]>) {
+        walk_enum_definition(self, name, variants)
     }
 
     fn visit_type_alias(&mut self, name: &Identifier, ty: Rc<Type>) {
@@ -120,6 +123,7 @@ pub fn walk_item(visitor: &mut impl Visitor, item: Rc<Item>) {
             body,
         } => visitor.visit_function_definition(name, signature, *body),
         ItemKind::Struct { name, fields } => visitor.visit_struct_definition(name, fields.clone()),
+        ItemKind::Enum { name, variants } => visitor.visit_enum_definition(name, variants.clone()),
         ItemKind::TypeAlias { name, ty } => visitor.visit_type_alias(name, ty.clone()),
         ItemKind::Static {
             is_mutable,
@@ -174,6 +178,18 @@ pub fn walk_struct_definition(
 pub fn walk_struct_field(visitor: &mut impl Visitor, field: Rc<StructField>) {
     visitor.visit_identifier(&field.name);
     visitor.visit_type(field.ty.clone());
+}
+
+pub fn walk_enum_definition(
+    visitor: &mut impl Visitor,
+    name: &Identifier,
+    variants: Rc<[Identifier]>,
+) {
+    visitor.visit_identifier(name);
+
+    for variant in variants.iter() {
+        visitor.visit_identifier(variant);
+    }
 }
 
 pub fn walk_type_alias(visitor: &mut impl Visitor, name: &Identifier, ty: Rc<Type>) {

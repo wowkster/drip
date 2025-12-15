@@ -27,6 +27,7 @@ pub struct Item {
 pub enum ItemKind {
     FunctionDefinition(Box<FunctionDefinition>),
     StructDefinition(Box<StructDefinition>),
+    EnumDefinition(Box<EnumDefinition>),
     TypeAlias(Box<TypeAlias>),
     Static(Box<Static>),
 }
@@ -94,6 +95,16 @@ pub struct StructField {
     pub visibility: Visibility,
     pub name: Identifier,
     pub ty: Box<Type>,
+}
+
+#[derive(Debug)]
+pub struct EnumDefinition {
+    pub id: NodeId,
+    pub span: Span,
+    pub visibility: Visibility,
+    // TODO: attributes like "repr(uX)"
+    pub name: Identifier,
+    pub variants: Vec<Identifier>,
 }
 
 #[derive(Debug)]

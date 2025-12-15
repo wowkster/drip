@@ -90,6 +90,17 @@ pub enum TypeKind {
         name: InternedSymbol,
         fields: Rc<[StructField]>,
     },
+    /// enum T {
+    ///     A.
+    ///     B.
+    ///     C.
+    /// }
+    ///
+    /// A user defined discrete set of allowed values
+    Enum {
+        def_id: hir::LocalDefId,
+        name: InternedSymbol,
+    },
     /// fn(i32, str, *T) -> u8
     ///
     /// A raw pointer to a function body
@@ -149,8 +160,6 @@ impl core::ops::Deref for Type {
 
 impl TypeKind {
     pub fn is_arithmetic(&self) -> bool {
-        // TODO: pointer arithmetic?
-
         match self {
             TypeKind::Char
             | TypeKind::Integer(_)
@@ -168,6 +177,7 @@ impl TypeKind {
             | TypeKind::Array { .. }
             | TypeKind::Tuple(_)
             | TypeKind::Struct { .. }
+            | TypeKind::Enum { .. }
             | TypeKind::FunctionPointer { .. }
             | TypeKind::Error => false,
         }
@@ -232,6 +242,7 @@ impl TypeKind {
             | TypeKind::Float(_)
             | TypeKind::Str
             | TypeKind::CStr
+            | TypeKind::Enum { .. }
             | TypeKind::Any
             | TypeKind::Error => HashSet::new(),
             TypeKind::Pointer(inner)
@@ -301,7 +312,7 @@ impl core::fmt::Display for TypeKind {
                 }
                 write!(f, ")")
             }
-            Self::Struct { name, .. } => {
+            Self::Struct { name, .. } | Self::Enum { name, .. } => {
                 write!(f, "{name}")
             }
             Self::FunctionPointer {

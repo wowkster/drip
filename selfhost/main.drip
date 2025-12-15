@@ -32,30 +32,12 @@ fn Span::new(start: usize,end: usize) -> Span {
     }
 }
 
-struct Token {
-    kind: TokenKind,
-    span: Span,
-}
-
-struct Lexer {
-    source: [u8],
-    position: usize,
-    line_number: usize,
-    peek_queue: *TokenNode,
-}
-
-struct TokenNode {
-    prev: *TokenNode,
-    next: *TokenNode,
-    token: Token
-}
-
 enum TokenKind {
-    /* Words */
+    // Words
     Keyword,          // fn | let | mut
     Identifier,       // main
 
-    /* Literals */
+    // Literals
     BooleanLiteral,    // true
     ByteLiteral,       // b'A'
     CharLiteral,       // 'A'
@@ -65,7 +47,7 @@ enum TokenKind {
     ByteStringLiteral, // b"hello, world"
     CStringLiteral,    // c"hello, world"
 
-    /* Delimiters */
+    // Delimiters
     OpenParen,    // (
     CloseParen,   // )
     OpenBracket,  // [
@@ -75,22 +57,22 @@ enum TokenKind {
     Semicolon,    // ;
     Comma,        // ,
 
-    /* Other */
+    // Other
     Dot,         // .
     Colon,       // :
     DoubleColon, // ::
     Arrow,       // ->
 
-    /* Unary Ops */
+    // Unary Ops
     Bang,  // !
     Tilde, // ~
 
-    /* Unary + Binary Ops */
+    // Unary + Binary Ops
     Asterisk,  // *
     Minus,     // -
     Ampersand, // &
 
-    /* Binary Ops */
+    // Binary Ops
     Plus,                 // +
     Divide,               // /
     Modulus,              // %
@@ -107,7 +89,7 @@ enum TokenKind {
     GreaterThan,          // >
     GreaterThanOrEqualTo, // >=
 
-    /* Assignment */
+    // Assignment
     Equals,           // =
     PlusEquals,       // +=
     MinusEquals,      // -=
@@ -126,6 +108,13 @@ enum TokenKind {
     Eof,
 }
 
+
+struct Token {
+    kind: TokenKind,
+    span: Span,
+}
+
+
 enum Keyword {
 
     Fn,
@@ -139,11 +128,32 @@ enum Keyword {
     Self,
 }
 
+struct Lexer {
+    source: str,
+    position: usize,
+    line_number: usize,
+    // peek_queue: *TokenNode,
+}
+
+// struct TokenNode {
+//     prev: *TokenNode,
+//     next: *TokenNode,
+//     token: Token
+// }
+
 //  fn Lexer::peek(*mut self) -> Token {
 //     return Token {
 
 //     }
 // }
+
+fn Lexer::new(source: str) -> Lexer {
+    Lexer {
+        source: source,
+        position: 0,
+        line_number: 0,
+    }
+}
 
 fn Lexer::next(*mut self) -> Token {
     while self.position < self.source.len {
@@ -153,7 +163,7 @@ fn Lexer::next(*mut self) -> Token {
         // we only allow ascii chars, return an error if we find anything else
         if c as u32 > 127 {
             return Token {
-                kind: Token::Error,
+                kind: TokenKind::Error,
                 span: Span::new(self.position, self.position + 1),
             };
         }
@@ -245,11 +255,11 @@ fn Lexer::next(*mut self) -> Token {
             self.read_triple(TokenKind::ShiftRightEquals)
         }
         // Shift left (<<)
-        else if c == '<' && has_next && self.source[self.position + 1] == '<') => {
+        else if c == '<' && has_next && self.source[self.position + 1] == '<' {
             self.read_double(TokenKind::ShiftLeft)
         }
         // Shift right (>>)
-        else if c == '>' && has_next && self.source[self.position + 1] == '>') => {
+        else if c == '>' && has_next && self.source[self.position + 1] == '>' {
             self.read_double(TokenKind::ShiftRight)
         }
         // Logical and equals (&&=)
@@ -261,11 +271,11 @@ fn Lexer::next(*mut self) -> Token {
             self.read_triple(TokenKind::LogicalOrEquals)
         }
         // Logical And (&&)
-        else if c == '&' && has_next && self.source[self.position + 1] == '&') => {
+        else if c == '&' && has_next && self.source[self.position + 1] == '&' {
             self.read_double(TokenKind::LogicalAnd)
         }
         // Logical Or (||)
-        else if c == '|' && has_next && self.source[self.position + 1] == '|') => {
+        else if c == '|' && has_next && self.source[self.position + 1] == '|' {
             self.read_double(TokenKind::LogicalOr)
         } else {
             // Table of single char tokens (matched after longer sequences are checked for)
@@ -308,10 +318,10 @@ fn Lexer::next(*mut self) -> Token {
             }
             
             return Token {
-                kind: Token::Error,
+                kind: TokenKind::Error,
                 span: Span::new(self.position, self.position + 1),
             };
-        }
+        };
         
         // TODO: short circuiting, enums, continue
             
@@ -322,4 +332,18 @@ fn Lexer::next(*mut self) -> Token {
         kind: TokenKind::Eof,
         span: Span::new(self.position, self.position),
     }
+}
+
+fn is_whitespace(c: char) -> bool {
+    c == ' ' || (c as u32 >= 9 && c as u32 <= 13)
+}
+
+
+fn is_digit(c: char) -> bool {
+    c as u32 >= '0' as u32 && c as u32 <= '9' as u32
+}
+
+
+fn is_alphabetic(c: char) -> bool {
+    (c as u32 >= 'A' as u32 && c as u32 <= 'Z' as u32) || (c as u32 >= 'a' as u32 && c as u32 <= 'z' as u32)
 }

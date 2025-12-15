@@ -133,6 +133,16 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                 hir::ItemKind::Struct { name, fields }
             }
+            ast::ItemKind::EnumDefinition(enum_definition) => {
+                let name = self.lower_ident(&enum_definition.name);
+                let variants = enum_definition
+                    .variants
+                    .iter()
+                    .map(|v| self.lower_ident(v))
+                    .collect();
+
+                hir::ItemKind::Enum { name, variants }
+            }
             ast::ItemKind::TypeAlias(type_alias) => {
                 let name = self.lower_ident(&type_alias.name);
                 let ty = self.lower_type(&type_alias.ty);
@@ -281,9 +291,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     .expect("node id for local (let) binding was not found"),
             ),
             hir::Resolution::IntrinsicFunction(name) => hir::Resolution::IntrinsicFunction(*name),
-            hir::Resolution::Primitive(primitive_kind) => {
-                hir::Resolution::Primitive(*primitive_kind)
-            }
+            hir::Resolution::Primitive(kind) => hir::Resolution::Primitive(*kind),
         }
     }
 
@@ -833,6 +841,13 @@ pub struct AstIndexer<'a, 'ast> {
 impl<'a, 'ast> ast::visit::Visitor<'ast> for AstIndexer<'a, 'ast> {
     fn visit_item(&mut self, item: &'ast ast::Item) {
         let def_id = *self.node_to_def_id_map.get(&item.id).unwrap();
+        self.index.insert(def_id, item);
+        
+        ast::visit::walk_item(self, item);
+    }
+    
+    fn visit_enum_definition(&mut self, enum_definition: &'ast ast::EnumDefinition) {
+        let def_id = *self.node_to_def_id_map.get(&enum_definition.id).unwrap();
         self.index.insert(def_id, item);
     }
 }

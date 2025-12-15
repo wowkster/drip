@@ -150,7 +150,7 @@ impl<'hir> TypeContext<'hir> {
 
     fn compute_hir_resolution_type(&mut self, resolution: hir::Resolution) -> Type {
         match resolution {
-            hir::Resolution::Definition(_definition_kind, local_def_id) => {
+            hir::Resolution::Definition(definition_kind, local_def_id) => {
                 let owner = &self.module.owners[local_def_id];
 
                 match owner.node() {
@@ -458,7 +458,6 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                     .insert(item.owner_id, ty);
             }
             hir::ItemKind::Struct { name, fields } => {
-                let name = name.symbol;
                 let fields = fields
                     .iter()
                     .map(|field| StructField {
@@ -469,8 +468,17 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
 
                 let ty = self.type_context.intern_type(TypeKind::Struct {
                     def_id: item.owner_id,
-                    name,
+                    name: name.symbol,
                     fields,
+                });
+                self.type_context
+                    .def_id_to_type_map
+                    .insert(item.owner_id, ty);
+            }
+            hir::ItemKind::Enum { name, .. } => {
+                let ty = self.type_context.intern_type(TypeKind::Enum {
+                    def_id: item.owner_id,
+                    name: name.symbol,
                 });
                 self.type_context
                     .def_id_to_type_map
@@ -1402,10 +1410,10 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             self.copy_type_from(segment.hir_id, *local_id);
             return;
         }
-
+        
         let computed_ty = self
             .type_context
-            .compute_hir_resolution_type(segment.resolution);
+            .compute_hir_resolution_type(dbg!(segment.resolution));
         self.insert_type(segment.hir_id, computed_ty);
     }
 
@@ -2675,6 +2683,8 @@ pub struct TypeCheckResults {
 
 pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> ModuleTypeCheckResults {
     let mut ctx = TypeContext::new(module, source_file);
+    
+    println!("indexing environment");
 
     // Compute types for top level items we might reference in body contexts
     let mut global_indexer = GlobalTypeEnvironmentIndexer {
@@ -2682,6 +2692,8 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
     };
     hir::visit::walk_module(&mut global_indexer, module);
 
+    println!("type checking bodies");
+    
     let mut function_results = BTreeMap::new();
 
     let mut tainted_with_errors = false;

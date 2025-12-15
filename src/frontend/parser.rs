@@ -8,7 +8,7 @@ use crate::frontend::{
     SourceFile,
     ast::{
         ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
-        Expression, ExpressionKind, FunctionCallArgumentList, FunctionDefinition,
+        EnumDefinition, Expression, ExpressionKind, FunctionCallArgumentList, FunctionDefinition,
         FunctionParameter, FunctionParameterList, FunctionSignature, Identifier, Literal,
         LiteralKind, Local, LocalKind, Module, QualifiedIdentifier, SelfParameter, Statement,
         StatementKind, Static, StructDefinition, StructField, StructInitializerField, Type,
@@ -125,6 +125,7 @@ impl<'source> Parser<'source> {
         token
     }
 
+    #[track_caller]
     fn expect_keyword(&mut self, keyword: Keyword) -> Token {
         self.expect_next_to_be(TokenKind::Keyword(keyword))
     }
@@ -153,6 +154,15 @@ impl<'source> Parser<'source> {
                     kind: ItemKind::StructDefinition(structure),
                 }
             }
+            TokenKind::Keyword(Keyword::Enum) => {
+                let enumeration = Box::new(self.parse_enum_definition());
+
+                Item {
+                    id: self.create_node_id(),
+                    span: enumeration.span,
+                    kind: ItemKind::EnumDefinition(enumeration),
+                }
+            }
             TokenKind::Keyword(Keyword::Type) => {
                 let type_alias = Box::new(self.parse_type_alias());
 
@@ -171,11 +181,15 @@ impl<'source> Parser<'source> {
                     kind: ItemKind::Static(static_),
                 }
             }
-            _ => self.report_fatal_error(peeked.span, &format!(
-                "Expected item in module but found: {} ({:?})",
-                self.lexer.source().value_of_span(peeked.span),
-                peeked.kind
-            )),
+
+            _ => self.report_fatal_error(
+                peeked.span,
+                &format!(
+                    "Expected item in module but found: {} ({:?})",
+                    self.lexer.source().value_of_span(peeked.span),
+                    peeked.kind
+                ),
+            ),
         }
     }
 
@@ -360,6 +374,49 @@ impl<'source> Parser<'source> {
             visibility: Visibility::Private,
             name,
             ty: Box::new(ty),
+        }
+    }
+
+    fn parse_enum_definition(&mut self) -> EnumDefinition {
+        let enum_keyword = self.expect_keyword(Keyword::Enum);
+        let name = self.parse_identifier();
+
+        let mut variants = Vec::new();
+
+        self.expect_next_to_be(TokenKind::OpenBrace);
+
+        // If the next token is not a closing paren, try parsing function
+        // parameters
+        if self.expect_peek("function parameter or closing brace").kind != TokenKind::CloseBrace {
+            // If a close paren was not found then there MUST be at least one
+            // parameter
+            variants.push(self.parse_identifier());
+
+            // While the next token is a comma try and parse more parameters
+            while self
+                .lexer
+                .peek()
+                .is_some_and(|t| t.kind == TokenKind::Comma)
+            {
+                self.expect_next_to_be(TokenKind::Comma);
+
+                // Allow trailing commas
+                if self.expect_peek("enum member or comma").kind == TokenKind::CloseBrace {
+                    break;
+                }
+
+                variants.push(self.parse_identifier());
+            }
+        }
+
+        let closing_brace = self.expect_next_to_be(TokenKind::CloseBrace);
+
+        EnumDefinition {
+            id: self.create_node_id(),
+            span: Span::new(enum_keyword.span.start, closing_brace.span.end),
+            visibility: Visibility::Private,
+            name,
+            variants,
         }
     }
 

@@ -168,7 +168,8 @@ pub enum Keyword {
     Type,
     Static,
     #[strum(serialize = "self")]
-    This
+    This,
+    Enum
 }
 
 /// Table of single char tokens (matched after longer sequences are checked for)
