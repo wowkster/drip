@@ -1,0 +1,13 @@
+pub fn read_to_vec(path: cstr) -> VecU8 {
+    let fd = open(path, 0, 0);
+
+    let reader = BufRead::new(fd);
+    let mut vec = VecU8::new();
+
+    reader.read_to_end(vec);
+
+    reader.free();
+    close(fd);
+    
+    vec
+}

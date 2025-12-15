@@ -22,7 +22,7 @@ pub const O_RDWR: i32 =   0xA000;
 pub const O_SEARCH: i32 =   0x4000;
 pub const O_WRONLY: i32 =   0x8000
 
-pub fn open(path: *u8, flags: i32, mode: u16) -> i32 {
+pub fn open(path: cstr, flags: i32, mode: u16) -> i32 {
     syscall(2, path, flags, mode)
 }
 
@@ -30,5 +30,5 @@ pub fn open_str(path: str, flags: i32, mode: u16) -> i32 {
     let mut buffer = [0u8; 256];
     strncopy(&mut buffer, path.ptr, 255);
 
-    open(&buffer, flags, mode)
+    open(&buffer as cstr, flags, mode)
 }

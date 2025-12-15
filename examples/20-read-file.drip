@@ -1,0 +1,20 @@
+fn main(argv: [*u8]) {
+    let source_file: *u8 = argv[1];
+    
+    let fd = open(source_file, 0, 0);
+    let reader = BufRead::new(fd);
+    
+    let mut vec = VecU8::new();
+    while reader.read_line(&mut vec) {
+        let mut i = 0;
+        while i < vec.len {
+            let b = vec.get(i);
+            print("{}", b as u32 as char);
+            
+            i = i + 1;
+        }
+        
+        print("\n");
+        vec.clear();
+    }
+}

@@ -1,0 +1,97 @@
+// Heap allocation size of the internal backing buffer
+const BUFFER_SIZE: usize = 1024;
+
+pub struct BufRead {
+    fd: u32,
+    buffer: *mut [u8; BUFFER_SIZE],
+    len: usize, // bytes in the buffer
+    pos: usize, // position in the buffer
+}
+
+pub fn BufRead::new(fd: u32) -> BufRead {
+    let buffer = malloc(BUFFER_SIZE) as *[u8; BUFFER_SIZE];
+
+    if buffer == 0 {
+        print("[BufRead::new] failed to allocate backing buffer\n");
+        exit(1);
+    }
+
+    BufRead {
+        fd,
+        buffer,
+        len: 0
+    }
+}
+
+pub fn BufRead::free(*mut self) {
+    free(self.buffer);
+}
+
+/// Reads into the provided vector until either a \n is found or EOF is reached.
+/// Returns whether or not there is more data to read (false if EOF eached).
+pub fn BufRead::read_line(*mut self, vec: *mut VecU8) -> bool {
+    while true {
+        // read more data
+        if pos == len {
+            let len = read(self.fd, self.buffer, BUFFER_SIZE);
+
+            if len < 0 {
+                print("[BufRead::read_line] failed to read from file\n");
+                exit(1);
+            }
+
+            self.len = len;
+            self.pos = 0;
+
+            // reached EOF
+            if len == 0 {
+                return flase;
+            }
+        }
+
+        let start = self.buffer + self.pos as *[u8; BUFFER_SIZE];
+        let n = self.len - self.pos;
+
+        let i = memchr(start, b'\n', n);
+        if i < 0 {
+            self.pos = self.len;
+
+            vec.extend(slice(start, n));
+            continue;
+        }
+
+        self.pos = self.pos + i + 1;
+
+        vec.extend(slice(start, i + 1));
+        return true;
+    }
+}
+
+/// Reads until the end of the file into the provided vector
+pub fn BufRead::read_to_end(*mut self, vec: *mut VecU8) {
+    while true {
+        // read more data
+        if pos == len {
+            let len = read(self.fd, self.buffer, BUFFER_SIZE);
+
+            if len < 0 {
+                print("[BufRead::read_to_end] failed to read from file\n");
+                exit(1);
+            }
+
+            self.len = len;
+            self.pos = 0;
+
+            // reached EOF
+            if len == 0 {
+                return;
+            }
+        }
+
+        let start = self.buffer + self.pos as *[u8; BUFFER_SIZE];
+        let n = self.len - self.pos;
+
+        self.pos = self.len;
+        vec.extend(slice(start, n));
+    }
+}

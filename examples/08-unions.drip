@@ -70,7 +70,7 @@ pub union Result<T, E> {
     err: E,
 }
 
-let r = Result<i32, String> { ok: 1 };
+let r = Result<i32, String> { none };
 
 // Similar pattern matching behavior
 match r {
