@@ -1,0 +1,104 @@
+pub fn memcpy(dest: *mut any, src: *mut any, len: usize) {
+    let mut i = 0;
+
+    // TODO: optimize with SIMD or at least use larger quanta
+    
+    while i < len {
+        *((dest + i as *any) as *u8) = *((src + i as *any) as *u8);
+        i = i + 1;
+    }
+}
+
+pub fn memmove() {
+    // TODO
+}
+
+pub fn strcopy(destination: *mut u8, source: *u8) -> *mut u8 {
+    // TODO
+}
+
+pub fn strncopy(destination: *mut u8, source: *u8, num: usize) -> *mut u8 {
+    // TODO
+}
+
+pub fn strcat() {
+    // TODO
+}
+
+pub fn strncat() {
+    // TODO
+}
+
+pub fn memcmp() {
+    // TODO
+}
+
+/// Compares two null-terminated strings against each other
+pub fn strcmp(ptr1: *u8, ptr2: *u8) -> i32 {
+    // TODO
+}
+
+pub fn strcoll() {
+    // TODO
+}
+
+pub fn strncmp() {
+    // TODO
+}
+
+pub fn strxfrm() {
+    // TODO
+}
+
+pub fn memchr(buffer: *u8, c: u8, n: usize) {
+    // TODO
+}
+
+pub fn strchr() {
+    // TODO
+}
+
+pub fn strcspn() {
+    // TODO
+}
+
+pub fn strpbrk() {
+    // TODO
+}
+
+pub fn strrchr() {
+    // TODO
+}
+
+pub fn strspn() {
+    // TODO
+}
+
+/// Finds the finds the first occurance of needle in haystack, returning the
+/// index
+pub fn strstr(haystack: *u8, needle: *u8) -> usize {
+    // TODO
+}
+
+pub fn strtok() {
+    // TODO
+}
+
+pub fn memset() {
+    // TODO
+}
+
+pub fn strerror() {
+    // TODO
+}
+
+/// Finds the length of a null-terminated string
+pub fn strlen(ptr: *u8) -> usize {
+    let mut p = p;
+    
+    while *p != 0 {
+        p = p + 1;
+    }
+    
+    (p - ptr) as usize
+}

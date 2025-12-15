@@ -1,0 +1,8 @@
+fn main(argv: [*u8]) {
+    let source_dile: *u8 = argv[1];
+    
+    let fd = open(source_file, 0, 0);
+    
+    
+}
+

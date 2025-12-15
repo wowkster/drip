@@ -1,0 +1,58 @@
+const BUFFER_SIZE: usize = 1024;
+
+pub struct BufRead {
+    fd: u32,
+    buffer: *[u8; BUFFER_SIZE],
+    len: usize, // bytes in the buffer
+    pos: usize, // position in the buffer
+}
+
+pub fn BufRead::new(fd: u32) -> BufRead {
+    let buffer = malloc(BUFFER_SIZE) as *[u8; BUFFER_SIZE];
+    
+    if buffer == 0 {
+        print("[BufRead::new] failed to allocate backing buffer\n");
+        exit(1);
+    }
+    
+    BufRead {
+        fd,
+        buffer,
+        len: 0
+    }   
+}
+
+pub fn BufRead::read_line(*mut self) -> ?str {
+    let mut vec = VecU8::new();
+    
+    while true {        
+        // read more data
+        if pos == len {
+            let len = read(self.fd, self.buffer, BUFFER_SIZE);
+            
+            if len < 0 {
+                print("[BufRead::read_line] failed to read from file\n");
+                exit(1);
+            }
+            
+            if len == 0 {
+                if vec.len > 
+            }
+            
+            self.len = len;
+            self.pos = 0;
+        }
+        
+        let start = self.buffer + self.pos as *[u8; BUFFER_SIZE];
+        let n = self.len - self.pos;
+        
+        let i = memchr(start, b'\n', n);
+        
+        
+        if i < 0 {
+            vec.extend(start, n);
+            continue;
+        }
+
+    }   
+}

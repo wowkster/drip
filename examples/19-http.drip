@@ -1,0 +1,67 @@
+const PORT: u16 = 80;
+const BUFFER_SIZE: usize = 4096;
+
+fn main() {
+    let server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+     if (server_fd < 0) {
+         print("[main] failed to create socket: {}\n", server_fd);
+         exit(1);
+    }
+
+    let opt: i32 = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    let server_addr: sockaddr_in;
+    memset(&server_addr, 0, sizeof(server_addr));
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    if bind(server_fd, &server_addr as *sockaddr, sizeof(server_addr)) < 0 {
+        print("[main] failed to bind socket\n");
+        close(server_fd);
+        exit(1);
+    }
+
+    if listen(server_fd, 5) < 0 {
+        print("[main] failed to listen on socket\n");
+        close(server_fd);
+        exit(1);
+    }
+
+    print("Server listening on port {}...\n", PORT);
+
+    let client_addr: sockaddr_in;
+    memset(&client_addr, 0, sizeof(client_addr));
+
+    while true {
+        let client_fd = accept(server_fd, &client_addr as *sockaddr, &sizeof(client_addr));
+
+        if (client_fd < 0) {
+            print("[main] failed to accept client connection: {}\n", client_fd);
+            continue;
+        }
+
+        if (fork() == 0) {
+            close(server_fd);
+            handle_client(client_fd);
+        }
+
+        close(client_fd);
+    }
+}
+
+fn handle_client(fd: u32) {
+    let buffer = [0; BUFFER_SIZE];
+
+    let mut bytes_read: isize = 0;
+
+    while (bytes_read = read(fd, buffer, BUFFER_SIZE)) > 0 {
+        write(fd, buffer, bytes_read);
+    }
+
+    close(fd);
+    exit(0);
+}

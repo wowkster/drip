@@ -1,0 +1,11 @@
+pub fn read(fd: u32, buffer: *mut u8, count: usize) -> isize {
+    syscall(0, fd, buffer, count)
+}
+
+pub fn write(fd: u32, buffer: *u8, count: usize) -> isize {
+    syscall(1, fd, buffer, count)
+}
+
+pub fn close(fd: u32) -> i32 {
+    syscall(3, fd)
+}

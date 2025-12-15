@@ -1,0 +1,23 @@
+pub fn i32::abs(value: i32) -> i32 {
+    if value < 0 {
+        -value
+    } else {
+        value
+    }
+}
+
+/// Modulus operator that behaves like python's `%` operator (not sure what this
+/// is called)
+pub fn i32::mod(dividend: i32, divisor: i32) -> i32 {
+    (dividend % divisor + divisor) % divisor
+}
+
+/// Division that behaves like python's `//` operator (not sure what this is
+/// called)
+pub fn i32::div(dividend: i32, divisor: i32) -> i32 {
+    if dividend < 0 {
+        (dividend + 1) / divisor - 1
+    } else {
+        dividend / divisor
+    }
+}
