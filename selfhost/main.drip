@@ -1,8 +1,325 @@
-fn main(argv: [*u8]) {
-    let source_dile: *u8 = argv[1];
-    
-    let fd = open(source_file, 0, 0);
-    
-    
+fn main(argv: [cstr]) {
+    // TODO: read from file
+    // let source_file = read_to_vec(argv[1]);
+
+    let source_file = "fn main() -> i32 { 67 ]";
+    let lexer = Lexer::new(source_file);
+
+    let token: Token = lexer.next();
+
+    while token.kind != TokenKind::Eof {
+        print(
+            "kind = {}, start = {}, end = {}\n",
+            token.kind,
+            token.span.start,
+            token.span.end
+        );
+
+        token = lexer.next();
+    }
 }
 
+
+struct Span {
+    start: usize,
+    end: usize,
+}
+
+fn Span::new(start: usize,end: usize) -> Span {
+    Span {
+        start: start, 
+        end: end,
+    }
+}
+
+struct Token {
+    kind: TokenKind,
+    span: Span,
+}
+
+struct Lexer {
+    source: [u8],
+    position: usize,
+    line_number: usize,
+    peek_queue: *TokenNode,
+}
+
+struct TokenNode {
+    prev: *TokenNode,
+    next: *TokenNode,
+    token: Token
+}
+
+enum TokenKind {
+    /* Words */
+    Keyword,          // fn | let | mut
+    Identifier,       // main
+
+    /* Literals */
+    BooleanLiteral,    // true
+    ByteLiteral,       // b'A'
+    CharLiteral,       // 'A'
+    IntegerLiteral,    // 1
+    FloatLiteral,      // 1.0
+    StringLiteral,     // "hello, world"
+    ByteStringLiteral, // b"hello, world"
+    CStringLiteral,    // c"hello, world"
+
+    /* Delimiters */
+    OpenParen,    // (
+    CloseParen,   // )
+    OpenBracket,  // [
+    CloseBracket, // ]
+    OpenBrace,    // {
+    CloseBrace,   // }
+    Semicolon,    // ;
+    Comma,        // ,
+
+    /* Other */
+    Dot,         // .
+    Colon,       // :
+    DoubleColon, // ::
+    Arrow,       // ->
+
+    /* Unary Ops */
+    Bang,  // !
+    Tilde, // ~
+
+    /* Unary + Binary Ops */
+    Asterisk,  // *
+    Minus,     // -
+    Ampersand, // &
+
+    /* Binary Ops */
+    Plus,                 // +
+    Divide,               // /
+    Modulus,              // %
+    LogicalAnd,           // &&
+    LogicalOr,            // ||
+    BitwiseXor,           // ^
+    BitwiseOr,            // |
+    ShiftLeft,            // <<
+    ShiftRight,           // >>
+    DoubleEquals,         // ==
+    NotEquals,            // !=
+    LessThan,             // <
+    LessThanOrEqualTo,    // <=
+    GreaterThan,          // >
+    GreaterThanOrEqualTo, // >=
+
+    /* Assignment */
+    Equals,           // =
+    PlusEquals,       // +=
+    MinusEquals,      // -=
+    MultiplyEquals,   // *=
+    DivideEquals,     // /=
+    ModulusEquals,    // %=
+    LogicalAndEquals, // &&=
+    LogicalOrEquals,  // ||=
+    BitwiseXorEquals, // ^=
+    BitwiseAndEquals, // &=
+    BitwiseOrEquals,  // |=
+    ShiftLeftEquals,  // <<=
+    ShiftRightEquals, // >>=
+
+    Error,
+    Eof,
+}
+
+enum Keyword {
+
+    Fn,
+    Let,
+    Const,
+    Static,
+    Struct,
+    Enum,
+    Union,
+    Mut,
+    Self,
+}
+
+//  fn Lexer::peek(*mut self) -> Token {
+//     return Token {
+
+//     }
+// }
+
+fn Lexer::next(*mut self) -> Token {
+    while self.position < self.source.len {
+        let c = self.source[self.position];
+        
+     
+        // we only allow ascii chars, return an error if we find anything else
+        if c as u32 > 127 {
+            return Token {
+                kind: Token::Error,
+                span: Span::new(self.position, self.position + 1),
+            };
+        }
+        
+        let has_next = self.position + 1 < self.source.len;
+        let has_next_2 = self.position + 2 < self.source.len;
+        
+        let token = 
+        // Ignore whitespace
+        if is_whitespace(c) {
+            self.ignore_whitespace();
+            continue;
+        } 
+        // Ignore comments
+        else if c == '/' && has_next &&  self.source[self.position + 1] == '/' {
+            self.ignore_line();
+            continue;
+        }
+        // Integer and float literals
+        else if is_digit(c) || c == '.' && has_next && is_digit(self.source[self.position + 1]) {
+            self.read_number()
+        }
+        // Identifiers, keywords, and boolean literals
+        else if is_alphabetic(c) || c == '_' {
+            self.read_word()
+        }
+        // Arrow (->)
+        else if c == '-' && has_next && self.source[self.position + 1] == '>' {
+            self.read_double(TokenKind::Arrow)
+        }
+        // Double colon (::)
+        else if c == ':' && has_next && self.source[self.position + 1] == ':' {
+            self.read_double(TokenKind::DoubleColon)
+        }
+        // Double Equals (==)
+        else if c == '=' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::DoubleEquals)
+        }
+        // Not Equals (!=)
+        else if c == '!' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::NotEquals)
+        }
+        // Less than or equal (<=)
+        else if c == '<' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::LessThanOrEqualTo)
+        }
+        // Greater than or equal (>=)
+        else if c == '>' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::GreaterThanOrEqualTo)
+        }
+        // Plus equals (+=)
+        else if c == '+' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::PlusEquals)
+        }
+        // Minus equals (-=)
+        else if c == '-' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::MinusEquals)
+        }
+        // Multiply equals (*=)
+        else if c == '*' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::MultiplyEquals)
+        }
+        // Divide equals (/=)
+        else if c == '/' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::DivideEquals)
+        }
+        // Modulus equals (%=)
+        else if c == '%' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::ModulusEquals)
+        }
+        // Bitwise and equals (&=)
+        else if c == '&' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::BitwiseAndEquals)
+        }
+        // Bitwise or equals (|=)
+        else if c == '|' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::BitwiseOrEquals)
+        }
+        // Bitwise xor equals (^=)
+        else if c == '^' && has_next && self.source[self.position + 1] == '=' {
+            self.read_double(TokenKind::BitwiseXorEquals)
+        }
+        // Shift left equals (<<=)
+        else if c == '<' && has_next && self.source[self.position + 1] == '<' && has_next_2 && self.source [self.position + 2] == '=' {    
+            self.read_triple(TokenKind::ShiftLeftEquals)
+        }
+        // Shift right equals (>>=)
+        else if c == '>' && has_next && self.source[self.position + 1] == '>' && has_next_2 && self.source [self.position + 2] == '=' {    
+            self.read_triple(TokenKind::ShiftRightEquals)
+        }
+        // Shift left (<<)
+        else if c == '<' && has_next && self.source[self.position + 1] == '<') => {
+            self.read_double(TokenKind::ShiftLeft)
+        }
+        // Shift right (>>)
+        else if c == '>' && has_next && self.source[self.position + 1] == '>') => {
+            self.read_double(TokenKind::ShiftRight)
+        }
+        // Logical and equals (&&=)
+        else if c == '&' && has_next && self.source[self.position + 1] == '&' && has_next_2 && self.source [self.position + 2] == '=' {    
+            self.read_triple(TokenKind::LogicalAndEquals)
+        }
+        // Logical or equals (||=)
+        else if c == '|' && has_next && self.source[self.position + 1] == '|' && has_next_2 && self.source [self.position + 2] == '=' {    
+            self.read_triple(TokenKind::LogicalOrEquals)
+        }
+        // Logical And (&&)
+        else if c == '&' && has_next && self.source[self.position + 1] == '&') => {
+            self.read_double(TokenKind::LogicalAnd)
+        }
+        // Logical Or (||)
+        else if c == '|' && has_next && self.source[self.position + 1] == '|') => {
+            self.read_double(TokenKind::LogicalOr)
+        } else {
+            // Table of single char tokens (matched after longer sequences are checked for)
+            let single_tokens: [(char, TokenKind); 23] = [
+                ('(', TokenKind::OpenParen),
+                (')', TokenKind::CloseParen),
+                ('[', TokenKind::OpenBracket),
+                (']', TokenKind::CloseBracket),
+                ('{', TokenKind::OpenBrace),
+                ('}', TokenKind::CloseBrace),
+                (';', TokenKind::Semicolon),
+                (',', TokenKind::Comma),
+                ('!', TokenKind::Bang),
+                ('~', TokenKind::Tilde),
+                ('.', TokenKind::Dot),
+                (':', TokenKind::Colon),
+                ('*', TokenKind::Asterisk),
+                ('-', TokenKind::Minus),
+                ('=', TokenKind::Equals),
+                ('+', TokenKind::Plus),
+                ('/', TokenKind::Divide),
+                ('%', TokenKind::Modulus),
+                ('^', TokenKind::BitwiseXor),
+                ('&', TokenKind::Ampersand),
+                ('|', TokenKind::BitwiseOr),
+                ('<', TokenKind::LessThan),
+                ('>', TokenKind::GreaterThan),
+            ];
+            
+            let mut i = 0;
+           
+            while i < 23 {
+                let s = single_tokens[i];
+                
+                if c == s[0] {
+                    return self.read_single(s[1]);
+                }
+                
+                i = i + 1;
+            }
+            
+            return Token {
+                kind: Token::Error,
+                span: Span::new(self.position, self.position + 1),
+            };
+        }
+        
+        // TODO: short circuiting, enums, continue
+            
+        return token;
+    }
+
+    Token {
+        kind: TokenKind::Eof,
+        span: Span::new(self.position, self.position),
+    }
+}
