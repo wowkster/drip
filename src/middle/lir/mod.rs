@@ -5,6 +5,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
+    u32,
 };
 
 use crate::{
@@ -86,6 +87,9 @@ simple_index! {
 
 impl BlockId {
     pub const ZERO: Self = Self(0);
+    /// Used as a placeholder in jumps created by break statements to be patched
+    /// later on in the lowering process
+    pub const PLACEHOLDER: Self = Self(u32::MAX);
 }
 
 /// A temporary virtual register of some size and alignment
@@ -112,6 +116,15 @@ pub enum Type {
     Struct(Struct),
     // TODO: investigate whether this is reallt needed as a type?
     Array(Rc<Type>, usize),
+}
+
+impl Type {
+    fn as_indirect(&self) -> Self {
+        match self {
+            Type::Struct(_) | Type::Array(_, _) => Self::Pointer,
+            scalar => scalar.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -345,7 +358,7 @@ impl Struct {
             offset += layout.size;
         }
 
-        offset
+        align_to(offset, self.layout_of(index).alignment)
     }
 
     pub fn layout(&self) -> Layout {

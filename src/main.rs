@@ -1,4 +1,5 @@
 #![feature(decl_macro)]
+#![feature(backtrace_frames)]
 
 use std::{
     os::unix::ffi::OsStrExt,

@@ -127,6 +127,16 @@ impl<I: Index, T> IndexVec<I, T> {
     pub fn get_mut(&mut self, index: I) -> Option<&mut T> {
         self.raw.get_mut(index.index())
     }
+
+    #[inline]
+    pub fn ensure_contains_elem(&mut self, elem: I, fill_value: impl FnMut() -> T) -> &mut T {
+        let min_new_len = elem.index() + 1;
+        if self.len() < min_new_len {
+            self.raw.resize_with(min_new_len, fill_value);
+        }
+
+        &mut self[elem]
+    }
 }
 
 impl<I: Index, T: Debug> Debug for IndexVec<I, T> {

@@ -5,8 +5,6 @@
 
 use std::{fs, io::BufRead, path::Path};
 
-use itertools::Itertools;
-
 use crate::{
     backend::targets::{CodeGenerator, Target},
     middle::lir,

@@ -5,7 +5,9 @@ use super::{
     Identifier, Item, ItemKind, LetStatement, Literal, Module, OwnerNode, Path, PathSegment,
     Statement, StatementKind, Type, TypeKind,
 };
-use crate::middle::hir::{ArrayInitializer, StructField, StructInitializerField};
+use crate::middle::hir::{
+    ArrayInitializer, EnumVariant, MaybeOwner, StructField, StructInitializerField,
+};
 
 pub trait Visitor: Sized {
     fn visit_item(&mut self, item: Rc<Item>) {
@@ -36,8 +38,12 @@ pub trait Visitor: Sized {
         walk_struct_field(self, field)
     }
 
-    fn visit_enum_definition(&mut self, name: &Identifier, variants: Rc<[Identifier]>) {
+    fn visit_enum_definition(&mut self, name: &Identifier, variants: Rc<[Rc<EnumVariant>]>) {
         walk_enum_definition(self, name, variants)
+    }
+
+    fn visit_enum_variant(&mut self, enum_variant: Rc<EnumVariant>) {
+        walk_enum_variant(self, enum_variant)
     }
 
     fn visit_type_alias(&mut self, name: &Identifier, ty: Rc<Type>) {
@@ -106,11 +112,14 @@ pub enum BlockContext {
 }
 
 pub fn walk_module(visitor: &mut impl Visitor, module: &Module) {
-    for owner in module.owners.iter() {
-        match owner.node() {
-            OwnerNode::Item(item) => {
-                visitor.visit_item(item);
-            }
+    for definition in module.definitions.values() {
+        match definition {
+            MaybeOwner::Owner(owner) => match owner.node() {
+                OwnerNode::Item(item) => {
+                    visitor.visit_item(item);
+                }
+            },
+            MaybeOwner::NonOwner(_) => {}
         }
     }
 }
@@ -183,13 +192,17 @@ pub fn walk_struct_field(visitor: &mut impl Visitor, field: Rc<StructField>) {
 pub fn walk_enum_definition(
     visitor: &mut impl Visitor,
     name: &Identifier,
-    variants: Rc<[Identifier]>,
+    variants: Rc<[Rc<EnumVariant>]>,
 ) {
     visitor.visit_identifier(name);
 
     for variant in variants.iter() {
-        visitor.visit_identifier(variant);
+        visitor.visit_enum_variant(variant.clone());
     }
+}
+
+pub fn walk_enum_variant(visitor: &mut impl Visitor, enum_variant: Rc<EnumVariant>) {
+    visitor.visit_identifier(&enum_variant.name);
 }
 
 pub fn walk_type_alias(visitor: &mut impl Visitor, name: &Identifier, ty: Rc<Type>) {

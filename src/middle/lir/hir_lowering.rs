@@ -38,10 +38,24 @@ struct BodyLoweringContext<'hir> {
     block_map: IndexVec<lir::BlockId, lir::Block>,
     block_stack: VecDeque<lir::BlockId>,
 
+    /// Keeps track of the start of the nearest loop scope so that we
+    loop_ctx_stack: Vec<LoopContext>,
+
     /// If we are lowering an expression where the destination is known (like a
     /// let sms initializer), we use this destination instead of allocating a
     /// new temporary register to avoid unnecessary copying.
     destination_register: Option<lir::RegisterId>,
+}
+
+struct LoopContext {
+    // this is where continue blocks will jump to. within while loops this will
+    // be the first condition block. within infinite loops, this will just be
+    // the start of the body.
+    start_block: lir::BlockId,
+    // indexes of all the break instructions which were inserted within this
+    // loop context and need to be patched with the merge block id once it is
+    // known
+    break_instructions: Vec<(lir::BlockId, usize)>,
 }
 
 impl<'hir> BodyLoweringContext<'hir> {
@@ -75,11 +89,30 @@ impl<'hir> BodyLoweringContext<'hir> {
         })
     }
 
-    fn push_instruction(&mut self, instruction: lir::Instruction) {
+    #[track_caller]
+    fn push_instruction(&mut self, instruction: lir::Instruction) -> usize {
+        if let lir::Instruction::LoadMem { destination, .. } = &instruction {
+            let lir_ty = &self.register_map[*destination].ty;
+            assert!(
+                lir_ty.layout().size <= 8,
+                "invalid LoadMem instruction pushed in function {}",
+                self.global_symbol_name
+            );
+        } else if let lir::Instruction::Move { destination, .. } = &instruction {
+            let lir_ty = &self.register_map[*destination].ty;
+            assert!(
+                lir_ty.layout().size <= 8,
+                "invalid Move instruction pushed in function {} (destination ty = {lir_ty:?})",
+                self.global_symbol_name,
+            );
+        }
+
         let current_block = self.block_stack.back().unwrap();
         self.block_map[*current_block]
             .instructions
             .push(instruction);
+
+        self.block_map[*current_block].instructions.len() - 1
     }
 
     fn push_comment(&mut self, comment: impl Into<String>) {
@@ -275,6 +308,7 @@ impl<'hir> BodyLoweringContext<'hir> {
             | ty::TypeKind::Float(_)
             | ty::TypeKind::Pointer(_)
             | ty::TypeKind::FunctionPointer { .. }
+            | ty::TypeKind::Enum { .. }
             | ty::TypeKind::Any => {
                 // TODO: if LHS is a pointer and RHS is a usize, scale by size of pointee type
 
@@ -374,10 +408,6 @@ impl<'hir> BodyLoweringContext<'hir> {
                 name,
                 fields,
             } => todo!(),
-            ty::TypeKind::Enum {
-                def_id,
-                name,
-            } => todo!(),
             ty::TypeKind::Never | ty::TypeKind::Infer(_) | ty::TypeKind::Error => unreachable!(),
         }
     }
@@ -385,48 +415,82 @@ impl<'hir> BodyLoweringContext<'hir> {
     /// Outputs a copy from src into dest. For scalar types, this operation is a
     /// Move instruction. For aggregate types, this is a field by field copy
     /// operation.
-    fn lower_copy(&mut self, dest_reg: lir::RegisterId, src_reg: lir::RegisterId, ty: ty::Type) {
-        if ty.is_struct() {
-            // FIXME: could we just memcpy instead?
+    fn lower_copy(&mut self, dest_reg: lir::RegisterId, src_reg: lir::RegisterId, ty: lir::Type) {
+        match ty {
+            lir::Type::Struct(structure_ty) => {
+                // FIXME: could we just memcpy instead?
 
-            let ty = self.lower_type(ty);
-            let lir::Type::Struct(structure_ty) = ty else {
-                unreachable!()
-            };
+                for (i, f) in structure_ty.0.iter().enumerate() {
+                    match f {
+                        // for struct types, get the ptr to the src value, get the ptr to
+                        // the dest value, and recurse
+                        lir::Type::Struct(_) => {
+                            let src_ptr_reg =
+                                self.create_register_with_lir_type(lir::Type::Pointer);
+                            self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                destination: src_ptr_reg,
+                                source: lir::Operand::Register(src_reg),
+                                ty: structure_ty.clone(),
+                                index: i,
+                            });
 
-            for (i, f) in structure_ty.0.iter().enumerate() {
-                let src_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::GetStructElementPointer {
-                    destination: src_ptr_reg,
+                            let dest_ptr_reg =
+                                self.create_register_with_lir_type(lir::Type::Pointer);
+                            self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                destination: dest_ptr_reg,
+                                source: lir::Operand::Register(dest_reg),
+                                ty: structure_ty.clone(),
+                                index: i,
+                            });
+
+                            self.lower_copy(dest_ptr_reg, src_ptr_reg, f.clone());
+                        }
+                        lir::Type::Array(_, _) => todo!(),
+                        // for scalar types, get the ptr to the src value, load into a
+                        // temporary reg, get the ptr to the dest value, store the temp
+                        // value
+                        _ => {
+                            let src_ptr_reg =
+                                self.create_register_with_lir_type(lir::Type::Pointer);
+                            self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                destination: src_ptr_reg,
+                                source: lir::Operand::Register(src_reg),
+                                ty: structure_ty.clone(),
+                                index: i,
+                            });
+
+                            // FIXME: if field is a struct, we need to recursively copy all of its fields
+
+                            let tmp_reg = self.create_register_with_lir_type(f.to_owned());
+                            self.push_instruction(lir::Instruction::LoadMem {
+                                destination: tmp_reg,
+                                source: lir::Operand::Register(src_ptr_reg),
+                            });
+
+                            let dest_ptr_reg =
+                                self.create_register_with_lir_type(lir::Type::Pointer);
+                            self.push_instruction(lir::Instruction::GetStructElementPointer {
+                                destination: dest_ptr_reg,
+                                source: lir::Operand::Register(dest_reg),
+                                ty: structure_ty.clone(),
+                                index: i,
+                            });
+
+                            self.push_instruction(lir::Instruction::StoreMem {
+                                destination: lir::Operand::Register(dest_ptr_reg),
+                                source: lir::Operand::Register(tmp_reg),
+                            });
+                        }
+                    }
+                }
+            }
+            lir::Type::Array(_, _) => todo!(),
+            _ => {
+                self.push_instruction(lir::Instruction::Move {
+                    destination: dest_reg,
                     source: lir::Operand::Register(src_reg),
-                    ty: structure_ty.clone(),
-                    index: i,
-                });
-
-                let tmp_ptr_reg = self.create_register_with_lir_type(f.to_owned());
-                self.push_instruction(lir::Instruction::LoadMem {
-                    destination: tmp_ptr_reg,
-                    source: lir::Operand::Register(src_ptr_reg),
-                });
-
-                let dest_ptr_reg = self.create_register_with_lir_type(lir::Type::Pointer);
-                self.push_instruction(lir::Instruction::GetStructElementPointer {
-                    destination: dest_ptr_reg,
-                    source: lir::Operand::Register(dest_reg),
-                    ty: structure_ty.clone(),
-                    index: i,
-                });
-
-                self.push_instruction(lir::Instruction::StoreMem {
-                    destination: lir::Operand::Register(dest_ptr_reg),
-                    source: lir::Operand::Register(tmp_ptr_reg),
                 });
             }
-        } else {
-            self.push_instruction(lir::Instruction::Move {
-                destination: dest_reg,
-                source: lir::Operand::Register(src_reg),
-            });
         }
     }
 
@@ -442,6 +506,150 @@ impl<'hir> BodyLoweringContext<'hir> {
 
         self.destination_register = prev;
         res
+    }
+
+    /// Shared helper for lowering both normal functions and method calls
+    fn lower_function_call(
+        &mut self,
+        symbol: InternedSymbol,
+        self_arg: Option<(hir::SelfParameter, Rc<hir::Expression>)>,
+        arguments: impl Iterator<Item = Rc<hir::Expression>>,
+        return_ty: Option<ty::Type>,
+    ) -> Option<lir::RegisterId> {
+        use hir::visit::Visitor;
+
+        let mut args = Vec::new();
+
+        self.push_comment("copy arguments to function");
+
+        let self_reg = self_arg.map(|(self_parameter, self_target)| {
+            // 4 options here:
+            //  - copy call on an owned type
+            //    - create a copy by copying each field
+            //    - pass it as an argument
+            //  - copy call on an pointer type
+            //    - create a copy through dereferencing each field
+            //    - pass it as an argument
+            //  - pointer call on an owned type
+            //    - take the memory address of the type
+            //    - pass the pointer
+            //  - pointer call on a pointer type
+            //    - pass the pointer as the argument
+
+            let self_target_ty = self.type_map.get_type(self_target.hir_id);
+            match (self_parameter, &*self_target_ty) {
+                (
+                    hir::SelfParameter::Owned,
+                    ty::TypeKind::Struct {
+                        def_id,
+                        name,
+                        fields,
+                    },
+                ) => todo!(),
+                (hir::SelfParameter::Owned, ty::TypeKind::Pointer(_)) => todo!(),
+                (hir::SelfParameter::Pointer { is_mutable: _ }, ty::TypeKind::Pointer(_)) => {
+                    self.expression_to_register_map[&self_target.hir_id.local_id]
+                }
+                // structs are actually stored as pointers to their
+                // allocation so this is the same as the pointer
+                // case
+                (hir::SelfParameter::Pointer { is_mutable: _ }, ty::TypeKind::Struct { .. }) => {
+                    self.expression_to_register_map[&self_target.hir_id.local_id]
+                }
+                (_, ty) => unreachable!("method call on illegal type: {ty}"),
+            }
+        });
+
+        // allocate a destination register for all
+        // function arguments. as we traverse the
+        // argument nodes, if they would have allocated
+        // a temporary, we make them use these registers
+        // instead. for example, encountering a path
+        // will move or copy into the register (based on
+        // whether its a scalar or aggregate).
+        for (i, arg) in arguments.enumerate() {
+            self.push_comment(format!("argument {i}"));
+
+            let ty = self.type_map.get_type(arg.hir_id);
+            let reg = self.create_register(ty.clone());
+
+            if ty.is_aggregate() {
+                let ty = self.lower_type(ty);
+                self.push_instruction(lir::Instruction::AllocStack {
+                    destination: reg,
+                    ty: ty,
+                });
+            }
+
+            self.with_destination(Some(reg), |this| this.visit_expression(arg.clone()));
+
+            debug_assert_eq!(
+                self.expression_to_register_map[&arg.hir_id.local_id], reg,
+                "function arg destination was not respected for expr: {arg:#?}"
+            );
+
+            args.push(reg);
+        }
+
+        let destination_reg = return_ty.clone().map(|ty| {
+            self.destination_register.unwrap_or_else(|| {
+                let reg = self.create_register(ty.clone());
+
+                if ty.is_aggregate() {
+                    let ty = self.lower_type(ty);
+                    self.push_instruction(lir::Instruction::AllocStack {
+                        destination: reg,
+                        ty: ty,
+                    });
+                }
+
+                reg
+            })
+        });
+
+        let args = return_ty
+            .clone()
+            .zip(destination_reg)
+            .and_then(|(ty, destination_reg)| {
+                if !ty.is_aggregate() {
+                    return None;
+                }
+
+                Some(lir::Operand::Register(destination_reg))
+            })
+            .into_iter()
+            .chain(self_reg.into_iter().map(lir::Operand::Register))
+            .chain(args.into_iter().map(lir::Operand::Register))
+            .collect();
+
+        // returning a struct:
+        //
+        // caller allocates room for the struct on the stack
+        // caller passes a pointer to this struct as a hidden argument (rdi)
+        // callee does alloc stack
+        // move exprs into fields
+        // memcpy from stack into return struct
+        //
+        // if optimizer recognizes that struct return is
+        // the last block, above can be simplified to
+        // move exprs directly into struct fields
+        // instead of calling memcpy
+
+        self.push_instruction(lir::Instruction::FunctionCall {
+            target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(symbol)),
+            arguments: args,
+            // we pass through the destination reg if
+            // there is no return type (already None),
+            // or if the return type is not a struct
+            // since struct returns are handled
+            // differently
+            destination: return_ty
+                .is_none_or(|ty| !ty.is_aggregate())
+                .then_some(destination_reg)
+                .flatten(),
+        });
+
+        destination_reg
     }
 }
 
@@ -501,6 +709,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 .expect("functions returning a struct should have an sret set");
             let src_struct_ptr_reg = self.expression_to_register_map[&e.hir_id.local_id];
 
+            let ty = self.lower_type(ty);
             self.lower_copy(dest_struct_ptr_reg, src_struct_ptr_reg, ty);
             self.push_instruction(lir::Instruction::Return { value: None });
         } else {
@@ -949,13 +1158,25 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             ty: structure_ty,
                             index: field_index,
                         });
-                        let field_reg = self
-                            .destination_register
-                            .unwrap_or_else(|| self.create_register_with_lir_type(field_ty));
-                        self.push_instruction(lir::Instruction::LoadMem {
-                            destination: field_reg,
-                            source: lir::Operand::Register(field_ptr_reg),
+
+                        let field_reg = self.destination_register.unwrap_or_else(|| {
+                            self.create_register_with_lir_type(field_ty.as_indirect())
                         });
+
+                        match field_ty {
+                            lir::Type::Struct(_) | lir::Type::Array(_, _) => {
+                                self.push_instruction(lir::Instruction::Move {
+                                    destination: field_reg,
+                                    source: lir::Operand::Register(field_ptr_reg),
+                                });
+                            }
+                            _ => {
+                                self.push_instruction(lir::Instruction::LoadMem {
+                                    destination: field_reg,
+                                    source: lir::Operand::Register(field_ptr_reg),
+                                });
+                            }
+                        }
 
                         self.expression_to_register_map
                             .insert(expression.hir_id.local_id, field_reg);
@@ -971,49 +1192,17 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 match &target.kind {
                     hir::ExpressionKind::Path(path) => {
                         match path.resolution() {
-                            hir::Resolution::Definition(hir::DefinitionKind::Function, def_id) => {
-                                let mut args = Vec::with_capacity(arguments.len());
-
-                                self.push_comment("copy arguments to function");
-
-                                // allocate a destination register for all
-                                // function arguments. as we traverse the
-                                // argument nodes, if they would have allocated
-                                // a temporary, we make them use these registers
-                                // instead. for example, encountering a path
-                                // will move or copy into the register (based on
-                                // whether its a scalar or aggregate).
-                                for (i, arg) in arguments.iter().enumerate() {
-                                    self.push_comment(format!("argument {i}"));
-
-                                    let ty = self.type_map.get_type(arg.hir_id);
-                                    let reg = self.create_register(ty.clone());
-
-                                    if ty.is_aggregate() {
-                                        let ty = self.lower_type(ty);
-                                        self.push_instruction(lir::Instruction::AllocStack {
-                                            destination: reg,
-                                            ty: ty,
-                                        });
-                                    }
-
-                                    self.with_destination(Some(reg), |this| {
-                                        this.visit_expression(arg.clone())
-                                    });
-
-                                    debug_assert_eq!(
-                                        self.expression_to_register_map[&arg.hir_id.local_id], reg,
-                                        "function arg destination was not respected for expr: {arg:#?}"
-                                    );
-
-                                    args.push(reg);
-                                }
-
+                            hir::Resolution::Definition(
+                                hir::DefinitionKind::Function
+                                | hir::DefinitionKind::AssociatedFunction,
+                                def_id,
+                            ) => {
                                 let hir::ItemKind::Function {
                                     name, signature, ..
                                 } = &self
                                     .module
                                     .get_owner(*def_id)
+                                    .unwrap()
                                     .node()
                                     .as_item()
                                     .unwrap()
@@ -1022,82 +1211,27 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     unreachable!()
                                 };
 
+                                let symbol = self.module.global_symbol_for(name);
                                 let return_ty = signature
                                     .return_type
                                     .as_ref()
                                     .map(|ty| self.type_map.get_type(ty.hir_id));
 
-                                let destination_reg = return_ty.clone().map(|ty| {
-                                    self.destination_register.unwrap_or_else(|| {
-                                        let reg = self.create_register(ty.clone());
+                                let dest_reg = self.lower_function_call(
+                                    symbol,
+                                    None,
+                                    arguments.iter().cloned(),
+                                    return_ty,
+                                );
 
-                                        if ty.is_aggregate() {
-                                            let ty = self.lower_type(ty);
-                                            self.push_instruction(lir::Instruction::AllocStack {
-                                                destination: reg,
-                                                ty: ty,
-                                            });
-                                        }
-
-                                        reg
-                                    })
-                                });
-
-                                let args = return_ty
-                                    .clone()
-                                    .zip(destination_reg)
-                                    .and_then(|(ty, destination_reg)| {
-                                        if !ty.is_aggregate() {
-                                            return None;
-                                        }
-
-                                        Some(lir::Operand::Register(destination_reg))
-                                    })
-                                    .into_iter()
-                                    .chain(args.into_iter().map(lir::Operand::Register))
-                                    .collect();
-
-                                // returning a struct:
-                                //
-                                // caller allocates room for the struct on the stack
-                                // caller passes a pointer to this struct as a hidden argument (rdi)
-                                // callee does alloc stack
-                                // move exprs into fields
-                                // memcpy from stack into return struct
-                                //
-                                // if optimizer recognizes that struct return is
-                                // the last block, above can be simplified to
-                                // move exprs directly into struct fields
-                                // instead of calling memcpy
-
-                                // passing a struct:
-                                // caller
-
-                                let symbol = self.module.global_symbol_for(name);
-                                self.push_instruction(lir::Instruction::FunctionCall {
-                                    target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(
-                                        symbol,
-                                    )),
-                                    arguments: args,
-                                    // we pass through the destination reg if
-                                    // there is no return type (already None),
-                                    // or if the return type is not a struct
-                                    // since struct returns are handled
-                                    // differently
-                                    destination: return_ty
-                                        .is_none_or(|ty| !ty.is_aggregate())
-                                        .then_some(destination_reg)
-                                        .flatten(),
-                                });
-
-                                if let Some(dest) = destination_reg {
+                                if let Some(dest) = dest_reg {
                                     self.expression_to_register_map
                                         .insert(expression.hir_id.local_id, dest);
                                 }
                             }
-                            hir::Resolution::Definition(..) => {
+                            hir::Resolution::Definition(def_kind, ..) => {
                                 unreachable!(
-                                    "other definition kinds may not be function call targets"
+                                    "other definition kinds may not be function call targets: {def_kind:?}"
                                 )
                             }
                             hir::Resolution::Local(_) => todo!("locals as function pointers"),
@@ -1256,7 +1390,19 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                                         dest_reg,
                                                     );
                                                 }
-                                                _ => todo!(),
+                                                ty::TypeKind::Enum { name, def_id } => {
+                                                    let str_ptr_reg =
+                                                        self.lower_string(*name, None);
+
+                                                    let dest_reg = self.print_string(str_ptr_reg);
+
+                                                    // FIXME: should this function care about the return value?
+                                                    self.expression_to_register_map.insert(
+                                                        expression.hir_id.local_id,
+                                                        dest_reg,
+                                                    );
+                                                }
+                                                ty_kind => todo!("print type {ty_kind}"),
                                             }
                                         }
                                     }
@@ -1483,10 +1629,6 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         is_method_call: true,
                         ..
                     } => {
-                        for arg in arguments.iter() {
-                            self.visit_expression(arg.clone());
-                        }
-
                         let method_def_id = self.type_map.function_results[&self.owner_id]
                             .method_resolutions[&target.hir_id.local_id];
 
@@ -1495,6 +1637,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         } = &self
                             .module
                             .get_owner(method_def_id)
+                            .unwrap()
                             .node()
                             .as_item()
                             .unwrap()
@@ -1503,110 +1646,20 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             unreachable!()
                         };
 
-                        // 4 options here:
-                        //  - copy call on an owned type
-                        //    - create a copy by copying each field
-                        //    - pass it as an argument
-                        //  - copy call on an pointer type
-                        //    - create a copy through dereferencing each field
-                        //    - pass it as an argument
-                        //  - pointer call on an owned type
-                        //    - take the memory address of the type
-                        //    - pass the pointer
-                        //  - pointer call on a pointer type
-                        //    - pass the pointer as the argument
-
-                        let self_target_ty = self.type_map.get_type(self_target.hir_id);
-                        let self_reg = match (signature.self_parameter.unwrap(), &*self_target_ty) {
-                            (
-                                hir::SelfParameter::Owned,
-                                ty::TypeKind::Struct {
-                                    def_id,
-                                    name,
-                                    fields,
-                                },
-                            ) => todo!(),
-                            (hir::SelfParameter::Owned, ty::TypeKind::Pointer(_)) => todo!(),
-                            (
-                                hir::SelfParameter::Pointer { is_mutable: _ },
-                                ty::TypeKind::Pointer(_),
-                            ) => self.expression_to_register_map[&self_target.hir_id.local_id],
-                            (
-                                hir::SelfParameter::Pointer { is_mutable: _ },
-                                ty::TypeKind::Struct {
-                                    def_id,
-                                    name,
-                                    fields,
-                                },
-                            ) => {
-                                let src_reg =
-                                    self.expression_to_register_map[&self_target.hir_id.local_id];
-                                let dest_reg =
-                                    self.create_register_with_lir_type(lir::Type::Pointer);
-
-                                let lir::Type::Struct(structure_ty) =
-                                    self.lower_type(self_target_ty)
-                                else {
-                                    unreachable!()
-                                };
-
-                                self.push_instruction(lir::Instruction::GetStructElementPointer {
-                                    destination: dest_reg,
-                                    source: lir::Operand::Register(src_reg),
-                                    ty: structure_ty,
-                                    index: 0,
-                                });
-
-                                dest_reg
-                            }
-
-                            (_, ty) => unreachable!("method call on illegal type: {ty}"),
-                        };
-
-                        // FIXME: handle aggregate types the same way we do in normal functions (create copies)
-
-                        let args = core::iter::once(lir::Operand::Register(self_reg))
-                            .chain(
-                                arguments
-                                    .iter()
-                                    .map(|arg| {
-                                        self.expression_to_register_map[&arg.hir_id.local_id]
-                                    })
-                                    .inspect(|id| match &self.register_map[*id].ty {
-                                        lir::Type::Struct(_) | lir::Type::Array(_, _) => {
-                                            todo!("pass aggregate types stored in registers")
-                                        }
-                                        _ => {}
-                                    })
-                                    .map(lir::Operand::Register),
-                            )
-                            .collect();
-
-                        let destination_reg = signature.return_type.as_ref().map(|ty| {
-                            self.destination_register.unwrap_or_else(|| {
-                                let ty = self.type_map.get_type(ty.hir_id);
-                                let reg = self.create_register(ty.clone());
-
-                                if ty.is_aggregate() {
-                                    let ty = self.lower_type(ty);
-                                    self.push_instruction(lir::Instruction::AllocStack {
-                                        destination: reg,
-                                        ty: ty,
-                                    });
-                                }
-
-                                reg
-                            })
-                        });
-
                         let symbol = self.module.global_symbol_for(name);
-                        self.push_instruction(lir::Instruction::FunctionCall {
-                            target: lir::Operand::Immediate(lir::Immediate::FunctionLabel(symbol)),
-                            arguments: args,
-                            destination: destination_reg,
-                        });
+                        let return_ty = signature
+                            .return_type
+                            .as_ref()
+                            .map(|ty| self.type_map.get_type(ty.hir_id));
 
-                        if let Some(dest) = destination_reg {
+                        let dest_reg = self.lower_function_call(
+                            symbol,
+                            Some((signature.self_parameter.unwrap(), self_target.clone())),
+                            arguments.iter().cloned(),
+                            return_ty,
+                        );
+
+                        if let Some(dest) = dest_reg {
                             self.expression_to_register_map
                                 .insert(expression.hir_id.local_id, dest);
                         }
@@ -1953,7 +2006,10 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     .predecessors
                     .insert(current_block_id);
 
-                // TODO: add continue predecessors to condition block
+                self.loop_ctx_stack.push(LoopContext {
+                    start_block: condition_block_id,
+                    break_instructions: Vec::new(),
+                });
 
                 self.block_stack.push_back(condition_block_id);
                 self.visit_expression(condition.clone());
@@ -2005,7 +2061,23 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     .predecessors
                     .insert(last_inserted_condition_block);
 
-                // TODO: add break predecessors to end block
+                // Patch break expressions within the loop body
+
+                let ctx = self.loop_ctx_stack.pop().unwrap();
+
+                for (block_id, idx) in ctx.break_instructions {
+                    let lir::Instruction::Jump { destination } =
+                        &mut self.block_map[block_id].instructions[idx]
+                    else {
+                        unreachable!()
+                    };
+
+                    *destination = end_block_id;
+
+                    self.block_map[end_block_id].predecessors.insert(block_id);
+                }
+
+                // Continue execution in the new block
 
                 self.block_stack.pop_back();
                 self.block_stack.push_back(end_block_id);
@@ -2121,8 +2193,33 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 }
             }
             hir::ExpressionKind::OperatorAssignment { operator, lhs, rhs } => todo!(),
-            hir::ExpressionKind::Break => todo!(),
-            hir::ExpressionKind::Continue => todo!(),
+            hir::ExpressionKind::Break => {
+                let current_block = *self.block_stack.back().unwrap();
+                let idx = self.push_instruction(lir::Instruction::Jump {
+                    destination: lir::BlockId::PLACEHOLDER,
+                });
+
+                let ctx = self
+                    .loop_ctx_stack
+                    .last_mut()
+                    .expect("missing loop context at continue");
+                ctx.break_instructions.push((current_block, idx));
+            }
+            hir::ExpressionKind::Continue => {
+                let ctx = self
+                    .loop_ctx_stack
+                    .last()
+                    .expect("missing loop context at continue");
+
+                let current_block_id = lir::BlockId::new(self.block_map.len() - 1);
+                self.block_map[ctx.start_block]
+                    .predecessors
+                    .insert(current_block_id);
+
+                self.push_instruction(lir::Instruction::Jump {
+                    destination: ctx.start_block,
+                });
+            }
             hir::ExpressionKind::Return(value) => {
                 hir::visit::walk_expression(self, expression.clone());
 
@@ -2136,6 +2233,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         .struct_return
                         .expect("functions returning a struct should have an sret set");
 
+                    let ty = self.lower_type(ty);
                     self.lower_copy(
                         dest_struct_ptr_reg,
                         self.expression_to_register_map[&v.hir_id.local_id],
@@ -2174,6 +2272,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // if we have a destination register, make a copy into it
                 if let Some(dest_reg) = self.destination_register {
                     let ty = self.type_map.get_type(segment.hir_id);
+                    let ty = self.lower_type(ty);
                     self.lower_copy(dest_reg, src_reg, ty);
 
                     self.expression_to_register_map
@@ -2192,6 +2291,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 } = &self
                     .module
                     .get_owner(*def_id)
+                    .unwrap()
                     .node()
                     .as_item()
                     .unwrap()
@@ -2216,6 +2316,38 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
 
                 self.expression_to_register_map
                     .insert(segment.hir_id.local_id, destination_reg);
+            }
+            hir::Resolution::Definition(hir::DefinitionKind::EnumVariant, def_id) => {
+                let enum_def_id = self.module.definitions[def_id].as_non_owner().unwrap();
+                let enum_def = self
+                    .module
+                    .get_owner(enum_def_id.owner)
+                    .unwrap()
+                    .node()
+                    .as_item()
+                    .unwrap();
+
+                let hir::ItemKind::Enum { variants, .. } = &enum_def.kind else {
+                    unreachable!()
+                };
+
+                let index = variants.iter().position(|v| v.def_id == *def_id).unwrap();
+
+                let ty = self.type_map.get_type(segment.hir_id);
+                let dest_reg = self
+                    .destination_register
+                    .unwrap_or_else(|| self.create_register(ty));
+
+                self.push_instruction(lir::Instruction::Move {
+                    destination: dest_reg,
+                    source: lir::Operand::Immediate(lir::Immediate::Int(
+                        index as _,
+                        lir::IntegerWidth::I32,
+                    )),
+                });
+
+                self.expression_to_register_map
+                    .insert(segment.hir_id.local_id, dest_reg);
             }
             hir::Resolution::Definition(..)
             | hir::Resolution::IntrinsicFunction(..)
@@ -2291,7 +2423,12 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
     let mut static_c_strings = BTreeMap::new();
 
     for owner_id in module.get_owners() {
-        let item = module.get_owner(owner_id).node().as_item().unwrap();
+        let item = module
+            .get_owner(owner_id)
+            .unwrap()
+            .node()
+            .as_item()
+            .unwrap();
 
         match &item.kind {
             hir::ItemKind::Function { name, .. } => {
@@ -2312,12 +2449,13 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
                     arguments: Vec::new(),
                     block_map: IndexVec::new(),
                     block_stack: VecDeque::new(),
+                    loop_ctx_stack: Vec::new(),
                     local_to_register_map: BTreeMap::new(),
                     expression_to_register_map: BTreeMap::new(),
                     destination_register: None,
                 };
 
-                let hir::OwnerNode::Item(item) = module.get_owner(owner_id).node();
+                let hir::OwnerNode::Item(item) = module.get_owner(owner_id).unwrap().node();
                 hir::visit::walk_item(&mut ctx, item);
 
                 function_definitions.insert(owner_id, ctx.into_output());
@@ -2340,6 +2478,7 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
                     arguments: Vec::new(),
                     block_map: IndexVec::new(),
                     block_stack: VecDeque::new(),
+                    loop_ctx_stack: Vec::new(),
                     local_to_register_map: BTreeMap::new(),
                     expression_to_register_map: BTreeMap::new(),
                     destination_register: None,

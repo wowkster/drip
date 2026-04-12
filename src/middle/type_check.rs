@@ -21,7 +21,13 @@
 //! report any errors since the input source code has been fully validated. From
 //! there, the next step is to use the computed types to lower the HIR to LIR.
 
-use std::{cell::OnceCell, collections::BTreeMap, panic::Location, rc::Rc};
+use std::{
+    backtrace::{Backtrace, BacktraceStatus},
+    cell::OnceCell,
+    collections::BTreeMap,
+    panic::Location,
+    rc::Rc,
+};
 
 use colored::Colorize;
 use hashbrown::{HashMap, HashSet};
@@ -74,6 +80,10 @@ impl<'hir> TypeContext<'hir> {
 
     pub fn get_error_type(&mut self) -> Type {
         self.intern_type(TypeKind::Error)
+    }
+
+    pub fn get_never_type(&mut self) -> Type {
+        self.get_primitive_type(PrimitiveKind::Never)
     }
 
     pub fn get_unit_type(&mut self) -> Type {
@@ -150,13 +160,31 @@ impl<'hir> TypeContext<'hir> {
 
     fn compute_hir_resolution_type(&mut self, resolution: hir::Resolution) -> Type {
         match resolution {
-            hir::Resolution::Definition(definition_kind, local_def_id) => {
-                let owner = &self.module.owners[local_def_id];
+            hir::Resolution::Definition(definition_kind, local_def_id) => match definition_kind {
+                DefinitionKind::EnumVariant => {
+                    let hir_id = &self.module.definitions[&local_def_id]
+                        .as_non_owner()
+                        .unwrap();
 
-                match owner.node() {
-                    hir::OwnerNode::Item(item) => self.def_id_to_type_map[&item.owner_id].clone(),
+                    self.def_id_to_type_map[&hir_id.owner].clone()
                 }
-            }
+                DefinitionKind::Function
+                | DefinitionKind::Constant
+                | DefinitionKind::Static
+                | DefinitionKind::AssociatedFunction
+                | DefinitionKind::Struct
+                | DefinitionKind::Enum
+                | DefinitionKind::Union
+                | DefinitionKind::Alias => {
+                    let owner = self.module.definitions[&local_def_id].unwrap();
+
+                    match owner.node() {
+                        hir::OwnerNode::Item(item) => {
+                            self.def_id_to_type_map[&item.owner_id].clone()
+                        }
+                    }
+                }
+            },
             hir::Resolution::Primitive(primitive_kind) => self.get_primitive_type(primitive_kind),
             hir::Resolution::IntrinsicFunction(name) => match name.value() {
                 "print" => {
@@ -245,6 +273,7 @@ impl<'hir> TypeContext<'hir> {
         let hir::Resolution::Definition(hir::DefinitionKind::Struct, implementor_id) =
             &name.segments[0].resolution
         else {
+            // FIXME: we hit this if a self type is used in a standalone function
             unreachable!()
         };
 
@@ -264,7 +293,7 @@ impl<'hir> TypeContext<'hir> {
     fn report_bug(&self, offending_span: Span, message: &str) -> ! {
         eprintln!(
             "{}: {} {}",
-            "bug".green(),
+            "bug".green().bold(),
             message,
             format!(
                 "(at {})",
@@ -274,7 +303,14 @@ impl<'hir> TypeContext<'hir> {
         );
 
         #[cfg(feature = "error-backtrace")]
-        eprintln!("{} {}", "backtrace:".cyan(), Location::caller());
+        {
+            eprintln!("{}: {}", "backtrace".cyan().bold(), Location::caller());
+
+            let bt = Backtrace::capture();
+            if bt.status() == BacktraceStatus::Captured {
+                eprintln!("{bt}");
+            }
+        }
 
         self.source_file.highlight_span(offending_span);
 
@@ -388,6 +424,7 @@ impl<'hir> TypeContext<'hir> {
             TypeErrorKind::IllegalMutation => "cannot mutate immutable variable".to_string(),
             TypeErrorKind::InvalidAssignment => "invalid left-hand side of assignment".to_string(),
             TypeErrorKind::UnknownFieldAccess {target, name } => format!("field `{name}` does not exist on type {target}"),
+            TypeErrorKind::UnknownMethodCall {target, name } => format!("method `{name}` does not exist on type {target}"),
             TypeErrorKind::MissingStructField { name } => format!("missing field `{name}`"),
             TypeErrorKind::ExtraStructField { name } => format!("unexpected field `{name}`"),
             TypeErrorKind::IllegalSelfUsage => format!("`self` may only not be used in functions without a `self` parameter"),
@@ -395,7 +432,7 @@ impl<'hir> TypeContext<'hir> {
 
         eprintln!(
             "{}: {} {}",
-            "error".red(),
+            "error".red().bold(),
             message,
             format!(
                 "(at {})",
@@ -403,6 +440,12 @@ impl<'hir> TypeContext<'hir> {
             )
             .white()
         );
+
+        #[cfg(feature = "error-backtrace")]
+        {
+            eprintln!("{}: {}", "backtrace".cyan().bold(), error.origin.backtrace);
+        }
+
         self.source_file.highlight_span(error.origin.span);
     }
 }
@@ -475,7 +518,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                     .def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
-            hir::ItemKind::Enum { name, .. } => {
+            hir::ItemKind::Enum { name, variants, .. } => {
                 let ty = self.type_context.intern_type(TypeKind::Enum {
                     def_id: item.owner_id,
                     name: name.symbol,
@@ -483,8 +526,10 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                 self.type_context
                     .def_id_to_type_map
                     .insert(item.owner_id, ty);
+
+                hir::visit::walk_enum_definition(self, name, variants.clone());
             }
-            hir::ItemKind::TypeAlias { ty, .. } => {
+            hir::ItemKind::TypeAlias { ty, name } => {
                 let ty = self.type_context.compute_hir_type(ty.clone());
                 self.type_context
                     .def_id_to_type_map
@@ -502,6 +547,14 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                     .insert(item.owner_id, ty);
             }
         }
+    }
+
+    fn visit_enum_variant(&mut self, variant: Rc<hir::EnumVariant>) {
+        let ty = self.type_context.def_id_to_type_map[&variant.hir_id.owner].clone();
+
+        self.type_context
+            .def_id_to_type_map
+            .insert(variant.def_id, ty);
     }
 }
 
@@ -551,6 +604,8 @@ struct TypeConstraintOrigin {
     span: Span,
     /// Used to format error messages better
     kind: TypeBoundary,
+    #[cfg(feature = "error-backtrace")]
+    backtrace: &'static Location<'static>,
 }
 
 /// A kind of place in the source code where a constraint may be generated
@@ -1138,6 +1193,7 @@ impl<'tcx, 'hir> TypeChecker<'tcx, 'hir> {
             .type_context
             .module
             .get_owner(self.owner_id)
+            .unwrap()
             .nodes
             .enumerate()
         {
@@ -1239,6 +1295,8 @@ enum TypeErrorKind {
     InvalidAssignment,
     /// Accessed fields must exist
     UnknownFieldAccess { target: Type, name: InternedSymbol },
+    /// Called methods must exist
+    UnknownMethodCall { target: Type, name: InternedSymbol },
     /// All struct fields must be present
     MissingStructField { name: InternedSymbol },
     /// No extra struct fields may be specified
@@ -1253,6 +1311,8 @@ impl TypeErrorKind {
             TypeErrorKind::TypeMismatch { expected, actual } => vec![expected, actual],
             TypeErrorKind::InvalidOperation { provided, .. } => vec![provided],
             TypeErrorKind::MissingReturnValue { expected } => vec![expected],
+            TypeErrorKind::UnknownFieldAccess { target, .. } => vec![target],
+            TypeErrorKind::UnknownMethodCall { target, .. } => vec![target],
             TypeErrorKind::InfinitelyRecursiveType { .. }
             | TypeErrorKind::ArgumentLengthMismatch { .. }
             | TypeErrorKind::CannotInfer
@@ -1262,7 +1322,6 @@ impl TypeErrorKind {
             | TypeErrorKind::ArrayLengthMismatch { .. }
             | TypeErrorKind::IllegalMutation
             | TypeErrorKind::InvalidAssignment
-            | TypeErrorKind::UnknownFieldAccess { .. }
             | TypeErrorKind::MissingStructField { .. }
             | TypeErrorKind::ExtraStructField { .. }
             | TypeErrorKind::IllegalSelfUsage => vec![],
@@ -1346,6 +1405,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         Span::INVALID
                     },
                     kind: TypeBoundary::ImplicitReturn,
+                    #[cfg(feature = "error-backtrace")]
+                    backtrace: Location::caller(),
                 },
             );
         } else if let Some(ret) = &signature.return_type {
@@ -1380,6 +1441,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     origin: TypeConstraintOrigin {
                         span: ret.span,
                         kind: TypeBoundary::ImplicitReturn,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                     kind: TypeErrorKind::MissingReturnValue {
                         expected: return_ty,
@@ -1397,6 +1460,13 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
         self.insert_type(field.hir_id, computed_ty);
     }
 
+    fn visit_enum_variant(&mut self, variant: Rc<hir::EnumVariant>) {
+        hir::visit::walk_enum_variant(self, variant.clone());
+
+        let ty = &self.type_context.def_id_to_type_map[&variant.def_id];
+        self.insert_type(variant.hir_id, ty.clone());
+    }
+
     /// Precompute types in function parameters and local bindings
     fn visit_type(&mut self, ty: Rc<hir::Type>) {
         hir::visit::walk_type(self, ty.clone());
@@ -1410,10 +1480,10 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             self.copy_type_from(segment.hir_id, *local_id);
             return;
         }
-        
+
         let computed_ty = self
             .type_context
-            .compute_hir_resolution_type(dbg!(segment.resolution));
+            .compute_hir_resolution_type(segment.resolution);
         self.insert_type(segment.hir_id, computed_ty);
     }
 
@@ -1443,6 +1513,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     origin: TypeConstraintOrigin {
                         span: let_stmt.span,
                         kind: TypeBoundary::LetStatement,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                     kind: TypeErrorKind::CannotInfer,
                 });
@@ -1465,6 +1537,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: let_stmt.span,
                         kind: TypeBoundary::LetStatement,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
                 self.insert_type(let_stmt.hir_id, explicit);
@@ -1508,6 +1582,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: expression.span,
                             kind: TypeBoundary::SelfExpression,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::IllegalSelfUsage,
                     });
@@ -1545,6 +1621,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             TypeConstraintOrigin {
                                 span: e.span,
                                 kind: TypeBoundary::ArrayInitializer,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
                             },
                         );
                     }
@@ -1599,6 +1677,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: expression.span,
                             kind: TypeBoundary::StructInitializer,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::MissingStructField {
                             name: *missing_field,
@@ -1618,6 +1698,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: field.span,
                             kind: TypeBoundary::StructInitializer,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::ExtraStructField { name: *extra_field },
                     });
@@ -1635,6 +1717,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         TypeConstraintOrigin {
                             span: field.span,
                             kind: TypeBoundary::StructInitializer,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                     );
                 }
@@ -1676,6 +1760,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: target.span,
                                     kind: TypeBoundary::FieldAccess,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::UnknownFieldAccess {
                                     target: target_ty,
@@ -1710,6 +1796,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: target.span,
                                     kind: TypeBoundary::FieldAccess,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::UnknownFieldAccess {
                                     target: target_ty,
@@ -1747,6 +1835,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: target.span,
                                     kind: TypeBoundary::FieldAccess,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::UnknownFieldAccess {
                                     target: target_ty,
@@ -1768,13 +1858,14 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 .filter_map(|owner_id| {
                                     self.type_context
                                         .module
-                                        .get_owner(owner_id)
+                                        .get_owner(owner_id).unwrap()
                                         .node()
                                         .as_item()
                                 })
                                 .find_map(|item| {
                                     let hir::ItemKind::Function {
                                         name: fn_name,
+                                        signature,
                                         ..
                                     } = &item.kind
                                     else {
@@ -1784,6 +1875,13 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     if !(matches!(fn_name.segments[0].resolution, hir::Resolution::Definition(_, id) if id == *def_id)
                                         && fn_name.segments[1].identifier.symbol == name.symbol)
                                     {
+                                        return None;
+                                    }
+
+                                    if signature.self_parameter.is_none() {
+                                        // TODO: add a help diagnostic here
+                                        // since it exists but its just not a
+                                        // method
                                         return None;
                                     }
 
@@ -1797,8 +1895,10 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     origin: TypeConstraintOrigin {
                                         span: name.span,
                                         kind: TypeBoundary::FieldAccess,
+                                        #[cfg(feature = "error-backtrace")]
+                                        backtrace: Location::caller(),
                                     },
-                                    kind: TypeErrorKind::UnknownFieldAccess {
+                                    kind: TypeErrorKind::UnknownMethodCall {
                                         target: target_ty.clone(),
                                         name: name.symbol,
                                     },
@@ -1822,6 +1922,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     origin: TypeConstraintOrigin {
                                         span: name.span,
                                         kind: TypeBoundary::FieldAccess,
+                                        #[cfg(feature = "error-backtrace")]
+                                        backtrace: Location::caller(),
                                     },
                                     kind: TypeErrorKind::UnknownFieldAccess {
                                         target: target_ty.clone(),
@@ -1844,6 +1946,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             origin: TypeConstraintOrigin {
                                 span: target.span,
                                 kind: TypeBoundary::FieldAccess,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
                             },
                             kind: TypeErrorKind::InvalidOperation {
                                 attempted_usage: TypeUsage::FieldAccess,
@@ -1867,16 +1971,20 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     let err = self.type_context.get_error_type();
                     self.insert_type(expression.hir_id, err);
 
-                    self.errors.push(TypeError {
-                        origin: TypeConstraintOrigin {
-                            span: target.span,
-                            kind: TypeBoundary::FunctionCall,
-                        },
-                        kind: TypeErrorKind::InvalidOperation {
-                            attempted_usage: TypeUsage::FunctionCall,
-                            provided: target_ty.clone(),
-                        },
-                    });
+                    if !target_ty.is_error() {
+                        self.errors.push(TypeError {
+                            origin: TypeConstraintOrigin {
+                                span: target.span,
+                                kind: TypeBoundary::FunctionCall,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
+                            },
+                            kind: TypeErrorKind::InvalidOperation {
+                                attempted_usage: TypeUsage::FunctionCall,
+                                provided: target_ty.clone(),
+                            },
+                        });
+                    }
                     return;
                 };
 
@@ -1903,6 +2011,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: expression.span,
                             kind: TypeBoundary::FunctionCall,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::ArgumentLengthMismatch {
                             expected: expected_parameters.len(),
@@ -1922,6 +2032,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         TypeConstraintOrigin {
                             span: argument.span,
                             kind: TypeBoundary::FunctionArgument,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                     );
                 }
@@ -1942,7 +2054,19 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     | TypeKind::Array { ty, length: _ } => {
                         self.insert_type(expression.hir_id, ty.clone());
                     }
-                    TypeKind::Tuple(items) => todo!("index fields of tuple"),
+                    TypeKind::Tuple(items) => {
+                        let hir::ExpressionKind::Literal(hir::Literal::Integer(index_value, _)) =
+                            &index.kind
+                        else {
+                            todo!("nice error for non literal tuple index");
+                        };
+
+                        if *index_value as usize >= items.len() {
+                            todo!("index out of bounds error");
+                        }
+
+                        self.insert_type(expression.hir_id, items[*index_value as usize].clone());
+                    }
                     TypeKind::Any => todo!("custom error for indexing an any ptr"),
                     _ => {
                         let err = self.type_context.get_error_type();
@@ -1952,6 +2076,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             origin: TypeConstraintOrigin {
                                 span: target.span,
                                 kind: TypeBoundary::Subscript,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
                             },
                             kind: TypeErrorKind::InvalidOperation {
                                 attempted_usage: TypeUsage::Subscript,
@@ -1972,6 +2098,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: index.span,
                         kind: TypeBoundary::Subscript,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
             }
@@ -1992,6 +2120,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: lhs.span,
                                     kind: TypeBoundary::BinaryOp,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::ArithmeticOperation,
@@ -2007,6 +2137,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: rhs.span,
                                     kind: TypeBoundary::BinaryOp,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::ArithmeticOperation,
@@ -2042,6 +2174,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     TypeConstraintOrigin {
                                         span: expression.span,
                                         kind: TypeBoundary::BinaryOp,
+                                        #[cfg(feature = "error-backtrace")]
+                                        backtrace: Location::caller(),
                                     },
                                 );
                                 return;
@@ -2071,6 +2205,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     origin: TypeConstraintOrigin {
                                         span: lhs.span,
                                         kind: TypeBoundary::BinaryOp,
+                                        #[cfg(feature = "error-backtrace")]
+                                        backtrace: Location::caller(),
                                     },
                                     kind: TypeErrorKind::InvalidOperation {
                                         attempted_usage: TypeUsage::LogicalOperation,
@@ -2086,6 +2222,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     origin: TypeConstraintOrigin {
                                         span: rhs.span,
                                         kind: TypeBoundary::BinaryOp,
+                                        #[cfg(feature = "error-backtrace")]
+                                        backtrace: Location::caller(),
                                     },
                                     kind: TypeErrorKind::InvalidOperation {
                                         attempted_usage: TypeUsage::LogicalOperation,
@@ -2118,6 +2256,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: expression.span,
                         kind: TypeBoundary::BinaryOp,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
             }
@@ -2139,6 +2279,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: expression.span,
                                     kind: TypeBoundary::Deref,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::Deref,
@@ -2218,6 +2360,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: expression.span,
                                     kind: TypeBoundary::LogicalOp,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::LogicalOperation,
@@ -2238,6 +2382,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: expression.span,
                                     kind: TypeBoundary::ArithmeticOp,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::ArithmeticOperation,
@@ -2273,6 +2419,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: expression.span,
                         kind: TypeBoundary::Cast,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
                 self.insert_type(expression.hir_id, target_ty);
@@ -2282,6 +2430,16 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 positive,
                 negative,
             } => {
+                // FIXME: we need to recurse all nested if else statements and
+                // take the type from the first block whose type is not never
+                // and ignore all never blocks after that. if all blocks are
+                // never, the if statements type should be never. if all blocks
+                // are never type, and there is no final else clause, the type
+                // of the expression is unit. if the last else block is missing
+                // AND not all blocks are (never OR unit) AND this is a bare
+                // expr or the last expression in a block then we should raise
+                // an error for a missing else.
+
                 let condition_ty = self.get_type(condition.hir_id);
                 let positive_ty = self.get_type(positive.hir_id);
 
@@ -2292,6 +2450,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: condition.span,
                             kind: TypeBoundary::IfCondition,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::TypeMismatch {
                             expected: bool_ty,
@@ -2308,17 +2468,25 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     if !positive_ty.is_never() && !negative_ty.is_never() {
                         self.add_equality_constraint(
                             positive_ty.clone(),
-                            negative_ty,
+                            negative_ty.clone(),
                             TypeConstraintOrigin {
                                 // TODO: use the span of the last expr in the block chain (lol)
                                 span: n.span,
                                 kind: TypeBoundary::IfBlock,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
                             },
                         );
                     }
-                }
 
-                self.insert_type(expression.hir_id, positive_ty);
+                    if positive_ty.is_never() {
+                        self.insert_type(expression.hir_id, negative_ty);
+                    } else {
+                        self.insert_type(expression.hir_id, positive_ty);
+                    }
+                } else {
+                    self.insert_type(expression.hir_id, positive_ty);
+                }
             }
             hir::ExpressionKind::While { condition, block } => {
                 let condition_ty = self.get_type(condition.hir_id);
@@ -2332,6 +2500,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: condition.span,
                             kind: TypeBoundary::WhileCondition,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::TypeMismatch {
                             expected: bool_ty,
@@ -2345,6 +2515,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: condition.span,
                             kind: TypeBoundary::WhileCondition,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::TypeMismatch {
                             expected: unit_ty.clone(),
@@ -2361,8 +2533,12 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                 match &lhs.kind {
                     hir::ExpressionKind::Path(path) => match path.resolution() {
                         hir::Resolution::Local(id) => {
-                            let local = self.type_context.module.get_owner(self.owner_id).nodes
-                                [*id]
+                            let local = self
+                                .type_context
+                                .module
+                                .get_owner(self.owner_id)
+                                .unwrap()
+                                .nodes[*id]
                                 .node
                                 .as_let_statement()
                                 .unwrap();
@@ -2381,6 +2557,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 .type_context
                                 .module
                                 .get_owner(*def_id)
+                                .unwrap()
                                 .node()
                                 .as_item()
                                 .unwrap()
@@ -2426,6 +2603,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: lhs.span,
                             kind: TypeBoundary::Assignment,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind,
                     });
@@ -2445,6 +2624,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: expression.span,
                         kind: TypeBoundary::Assignment,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
 
@@ -2468,6 +2649,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: lhs.span,
                                     kind: TypeBoundary::OpAssignment,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::ArithmeticOperation,
@@ -2483,6 +2666,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: rhs.span,
                                     kind: TypeBoundary::OpAssignment,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::ArithmeticOperation,
@@ -2510,6 +2695,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: lhs.span,
                                     kind: TypeBoundary::OpAssignment,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::LogicalOperation,
@@ -2525,6 +2712,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 origin: TypeConstraintOrigin {
                                     span: rhs.span,
                                     kind: TypeBoundary::OpAssignment,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
                                 },
                                 kind: TypeErrorKind::InvalidOperation {
                                     attempted_usage: TypeUsage::LogicalOperation,
@@ -2552,6 +2741,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     TypeConstraintOrigin {
                         span: expression.span,
                         kind: TypeBoundary::OpAssignment,
+                        #[cfg(feature = "error-backtrace")]
+                        backtrace: Location::caller(),
                     },
                 );
                 self.insert_type(expression.hir_id, unit_ty);
@@ -2568,6 +2759,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: expression.span,
                             kind: TypeBoundary::LoopControlFlow,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::IllegalLoopControlFlow(kind),
                     });
@@ -2584,11 +2777,13 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
 
                     if value_ty != return_ty {
                         self.add_equality_constraint(
-                            value_ty,
                             return_ty,
+                            value_ty,
                             TypeConstraintOrigin {
                                 span: expression.span,
                                 kind: TypeBoundary::ExplicitReturn,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
                             },
                         );
                     }
@@ -2597,6 +2792,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                         origin: TypeConstraintOrigin {
                             span: expression.span,
                             kind: TypeBoundary::ExplicitReturn,
+                            #[cfg(feature = "error-backtrace")]
+                            backtrace: Location::caller(),
                         },
                         kind: TypeErrorKind::MissingReturnValue {
                             expected: return_ty,
@@ -2621,34 +2818,51 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             self.within_loop = previous;
         }
 
+        let mut diverges = false;
+
         for stmt in block.statements.iter() {
-            let hir::StatementKind::BareExpression(e) = &stmt.kind else {
-                continue;
+            let expr_ty = match &stmt.kind {
+                hir::StatementKind::Let(l) => self.get_type(l.hir_id),
+                hir::StatementKind::SemiExpression(e) => self.get_type(e.hir_id),
+                hir::StatementKind::BareExpression(e) => {
+                    let expr_ty = self.get_type(e.hir_id);
+
+                    if !expr_ty.is_unit() && !expr_ty.is_never() && !expr_ty.is_error() {
+                        let unit_ty = self.type_context.get_unit_type();
+
+                        self.errors.push(TypeError {
+                            origin: TypeConstraintOrigin {
+                                // TODO: use the span of the last expr in the block
+                                span: e.span,
+                                kind: TypeBoundary::BareExpression,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
+                            },
+                            kind: TypeErrorKind::TypeMismatch {
+                                expected: unit_ty,
+                                actual: expr_ty.clone(),
+                            },
+                        });
+                    }
+
+                    expr_ty
+                }
             };
 
-            let expr_ty = self.get_type(e.hir_id);
-            let unit_ty = self.type_context.get_unit_type();
-
-            if !expr_ty.is_unit() && !expr_ty.is_never() && !expr_ty.is_error() {
-                self.errors.push(TypeError {
-                    origin: TypeConstraintOrigin {
-                        // TODO: use the span of the last expr in the block
-                        span: e.span,
-                        kind: TypeBoundary::BareExpression,
-                    },
-                    kind: TypeErrorKind::TypeMismatch {
-                        expected: unit_ty,
-                        actual: expr_ty,
-                    },
-                });
+            if expr_ty.is_never() {
+                diverges = true;
             }
         }
 
         if let Some(e) = &block.expression {
             self.copy_type_from(block.hir_id, e.hir_id);
         } else {
-            let unit_ty = self.type_context.get_unit_type();
-            self.insert_type(block.hir_id, unit_ty);
+            let ty = if diverges {
+                self.type_context.get_never_type()
+            } else {
+                self.type_context.get_unit_type()
+            };
+            self.insert_type(block.hir_id, ty);
         }
     }
 
@@ -2683,8 +2897,6 @@ pub struct TypeCheckResults {
 
 pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> ModuleTypeCheckResults {
     let mut ctx = TypeContext::new(module, source_file);
-    
-    println!("indexing environment");
 
     // Compute types for top level items we might reference in body contexts
     let mut global_indexer = GlobalTypeEnvironmentIndexer {
@@ -2692,8 +2904,6 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
     };
     hir::visit::walk_module(&mut global_indexer, module);
 
-    println!("type checking bodies");
-    
     let mut function_results = BTreeMap::new();
 
     let mut tainted_with_errors = false;
@@ -2714,7 +2924,7 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
             next_float_variable_id: FloatVariableId::new(0),
         };
 
-        let hir::OwnerNode::Item(item) = module.get_owner(owner_id).node();
+        let hir::OwnerNode::Item(item) = module.get_owner(owner_id).unwrap().node();
         hir::visit::walk_item(&mut body_ctx, item);
 
         match body_ctx.into_output() {

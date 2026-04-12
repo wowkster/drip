@@ -8,11 +8,12 @@ use crate::frontend::{
     SourceFile,
     ast::{
         ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
-        EnumDefinition, Expression, ExpressionKind, FunctionCallArgumentList, FunctionDefinition,
-        FunctionParameter, FunctionParameterList, FunctionSignature, Identifier, Literal,
-        LiteralKind, Local, LocalKind, Module, QualifiedIdentifier, SelfParameter, Statement,
-        StatementKind, Static, StructDefinition, StructField, StructInitializerField, Type,
-        TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind, Visibility,
+        EnumDefinition, EnumVariant, Expression, ExpressionKind, FunctionCallArgumentList,
+        FunctionDefinition, FunctionParameter, FunctionParameterList, FunctionSignature,
+        Identifier, Literal, LiteralKind, Local, LocalKind, Module, QualifiedIdentifier,
+        SelfParameter, Statement, StatementKind, Static, StructDefinition, StructField,
+        StructInitializerField, Type, TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind,
+        Visibility,
     },
     lexer::{Keyword, Lexer, Span, Token, TokenKind},
 };
@@ -390,7 +391,12 @@ impl<'source> Parser<'source> {
         if self.expect_peek("function parameter or closing brace").kind != TokenKind::CloseBrace {
             // If a close paren was not found then there MUST be at least one
             // parameter
-            variants.push(self.parse_identifier());
+            let variant_name = self.parse_identifier();
+            variants.push(EnumVariant {
+                id: self.create_node_id(),
+                span: variant_name.span,
+                name: variant_name,
+            });
 
             // While the next token is a comma try and parse more parameters
             while self
@@ -405,7 +411,12 @@ impl<'source> Parser<'source> {
                     break;
                 }
 
-                variants.push(self.parse_identifier());
+                let variant_name = self.parse_identifier();
+                variants.push(EnumVariant {
+                    id: self.create_node_id(),
+                    span: variant_name.span,
+                    name: variant_name,
+                });
             }
         }
 
@@ -1339,11 +1350,6 @@ impl<'source> Parser<'source> {
                     let _open_paren = self.expect_next_to_be(TokenKind::OpenBracket);
                     let index = self.parse_expression();
                     let close_paren = self.expect_next_to_be(TokenKind::CloseBracket);
-
-                    if let ExpressionKind::FieldAccess { is_method_call, .. } = &mut expression.kind
-                    {
-                        *is_method_call = true;
-                    }
 
                     expression = Expression {
                         id: self.create_node_id(),

@@ -11,7 +11,7 @@ use crate::{
     frontend::{ast, lexer::Span},
     index::{Index, IndexVec},
     middle::{
-        hir::{self, visit::Visitor},
+        hir::{self, HirId, visit::Visitor},
         primitive::UIntKind,
         resolve::{Namespace, ResolutionMap, Resolver},
     },
@@ -28,6 +28,10 @@ pub struct ItemLoweringContext<'a, 'ast> {
     body: Option<Rc<hir::Body>>,
     /// Maps IDs of local (let) bindings to their allocated hir item local ids
     local_id_map: BTreeMap<ast::NodeId, hir::ItemLocalId>,
+
+    // Definitions collected so far in lowering (used for adding non owner node
+    // definitions to the map)
+    definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
 }
 
 impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
@@ -35,6 +39,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
         module: &'ast ast::Module<'ast>,
         resolver: &'a ResolutionMap,
         owner_id: hir::LocalDefId,
+        definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
     ) -> Self {
         Self {
             module,
@@ -43,6 +48,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             next_local_id: hir::ItemLocalId::new(1),
             body: None,
             local_id_map: BTreeMap::new(),
+            definitions,
         }
     }
 
@@ -135,11 +141,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             }
             ast::ItemKind::EnumDefinition(enum_definition) => {
                 let name = self.lower_ident(&enum_definition.name);
-                let variants = enum_definition
-                    .variants
-                    .iter()
-                    .map(|v| self.lower_ident(v))
-                    .collect();
+                let variants = self.lower_enum_variants(&enum_definition.variants);
 
                 hir::ItemKind::Enum { name, variants }
             }
@@ -337,6 +339,32 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                 self.local_id_map.insert(f.id, field.hir_id.local_id);
 
                 field
+            })
+            .map(Rc::new)
+            .collect()
+    }
+
+    fn lower_enum_variants(
+        &mut self,
+        variants: &'ast [ast::EnumVariant],
+    ) -> Rc<[Rc<hir::EnumVariant>]> {
+        variants
+            .iter()
+            .map(|v| {
+                let local_def_id = self.resolver.node_to_def_id_map[&v.id];
+
+                let variant = hir::EnumVariant {
+                    def_id: local_def_id,
+                    hir_id: self.next_id(),
+                    name: self.lower_ident(&v.name),
+                    span: v.span,
+                };
+
+                self.local_id_map.insert(v.id, variant.hir_id.local_id);
+                self.definitions
+                    .insert(local_def_id, hir::MaybeOwner::NonOwner(variant.hir_id));
+
+                variant
             })
             .map(Rc::new)
             .collect()
@@ -752,9 +780,9 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
 struct ItemLowerer<'a, 'ast> {
     module: &'ast ast::Module<'ast>,
-    ast_index: &'a IndexVec<hir::LocalDefId, &'ast ast::Item>,
+    ast_index: &'a IndexVec<hir::LocalDefId, AstOwner<'ast>>,
     resolver: &'a ResolutionMap,
-    owners: &'a mut IndexVec<hir::LocalDefId, hir::Owner>,
+    definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
 }
 
 impl<'a, 'ast> ItemLowerer<'a, 'ast> {
@@ -762,29 +790,43 @@ impl<'a, 'ast> ItemLowerer<'a, 'ast> {
     // new HIR nodes
     fn with_lctx(
         &mut self,
-        owner_id: hir::LocalDefId,
+        local_def_id: hir::LocalDefId,
         f: impl FnOnce(&mut ItemLoweringContext<'_, 'ast>) -> hir::OwnerNode,
     ) {
-        let mut lctx = ItemLoweringContext::new(self.module, self.resolver, owner_id);
+        let mut lctx = ItemLoweringContext::new(
+            self.module,
+            self.resolver,
+            local_def_id,
+            &mut self.definitions,
+        );
 
         // invoke the function after preparing the context for this owner
         let node = f(&mut lctx);
 
         let (nodes, parenting) = index_hir(&node, lctx.next_local_id.index(), lctx.body.clone());
 
+        let body = lctx.body;
+
         // store the resulting owner
-        assert_eq!(self.owners.next_index(), owner_id);
-        self.owners.push(hir::Owner {
-            nodes,
-            parenting,
-            body: lctx.body,
-        });
+        self.definitions.insert(
+            local_def_id,
+            hir::MaybeOwner::Owner(hir::Owner {
+                nodes,
+                parenting,
+                body,
+            }),
+        );
     }
 
     pub fn lower_node(&mut self, def_id: hir::LocalDefId) {
-        let item = self.ast_index[def_id];
+        let owner = &self.ast_index[def_id];
 
-        self.with_lctx(def_id, |lctx| hir::OwnerNode::Item(lctx.lower_item(item)));
+        match owner {
+            AstOwner::NonOwner => {}
+            AstOwner::Item(item) => {
+                self.with_lctx(def_id, |lctx| hir::OwnerNode::Item(lctx.lower_item(*item)));
+            }
+        }
     }
 }
 
@@ -794,13 +836,13 @@ pub fn lower_to_hir<'ast>(module: &'ast ast::Module<'ast>) -> hir::Module {
     let resolver = resolver.into_outputs();
 
     let index = index_ast(&resolver.node_to_def_id_map, module);
-    let mut owners = IndexVec::new();
+    let mut definitions = BTreeMap::new();
 
     let mut lowerer = ItemLowerer {
         module,
         ast_index: &index,
         resolver: &resolver,
-        owners: &mut owners,
+        definitions: &mut definitions,
     };
 
     // lower nodes one at a time, resolving names and constructing HIR
@@ -808,7 +850,7 @@ pub fn lower_to_hir<'ast>(module: &'ast ast::Module<'ast>) -> hir::Module {
         lowerer.lower_node(def_id);
     }
 
-    hir::Module { owners }
+    hir::Module { definitions }
 }
 
 /// Pulls out the items from the AST and indexes them based on their assigned
@@ -816,39 +858,36 @@ pub fn lower_to_hir<'ast>(module: &'ast ast::Module<'ast>) -> hir::Module {
 pub fn index_ast<'ast>(
     node_to_def_id_map: &BTreeMap<ast::NodeId, hir::LocalDefId>,
     module: &'ast ast::Module,
-) -> IndexVec<hir::LocalDefId, &'ast ast::Item> {
+) -> IndexVec<hir::LocalDefId, AstOwner<'ast>> {
     let mut indexer = AstIndexer {
         node_to_def_id_map,
-        index: BTreeMap::new(),
+        index: IndexVec::new(),
     };
+
     ast::visit::walk_module(&mut indexer, module);
 
-    let mut res = IndexVec::new();
+    indexer.index
+}
 
-    for (def_id, item) in indexer.index {
-        assert_eq!(def_id, res.next_index());
-        res.push(item);
-    }
-
-    res
+pub enum AstOwner<'ast> {
+    NonOwner,
+    Item(&'ast ast::Item),
 }
 
 pub struct AstIndexer<'a, 'ast> {
     node_to_def_id_map: &'a BTreeMap<ast::NodeId, hir::LocalDefId>,
-    index: BTreeMap<hir::LocalDefId, &'ast ast::Item>,
+    index: IndexVec<hir::LocalDefId, AstOwner<'ast>>,
 }
 
 impl<'a, 'ast> ast::visit::Visitor<'ast> for AstIndexer<'a, 'ast> {
     fn visit_item(&mut self, item: &'ast ast::Item) {
         let def_id = *self.node_to_def_id_map.get(&item.id).unwrap();
-        self.index.insert(def_id, item);
-        
+
+        *self
+            .index
+            .ensure_contains_elem(def_id, || AstOwner::NonOwner) = AstOwner::Item(item);
+
         ast::visit::walk_item(self, item);
-    }
-    
-    fn visit_enum_definition(&mut self, enum_definition: &'ast ast::EnumDefinition) {
-        let def_id = *self.node_to_def_id_map.get(&enum_definition.id).unwrap();
-        self.index.insert(def_id, item);
     }
 }
 
@@ -955,6 +994,13 @@ impl hir::visit::Visitor for HirIndexer {
         self.insert(field.hir_id, hir::Node::StructField(field.clone()));
         self.with_parent(field.hir_id, |this| {
             hir::visit::walk_struct_field(this, field);
+        });
+    }
+
+    fn visit_enum_variant(&mut self, variant: Rc<hir::EnumVariant>) {
+        self.insert(variant.hir_id, hir::Node::EnumVariant(variant.clone()));
+        self.with_parent(variant.hir_id, |this| {
+            hir::visit::walk_enum_variant(this, variant);
         });
     }
 

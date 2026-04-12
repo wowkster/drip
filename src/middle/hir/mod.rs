@@ -25,14 +25,47 @@ use itertools::Itertools;
 
 #[derive(Debug)]
 pub struct Module {
-    /// All the item definitions within the module including those nested within
-    /// other items
-    pub owners: IndexVec<LocalDefId, Owner>,
+    /// All the owner definitions within the module including those nested
+    /// within other items
+    pub definitions: BTreeMap<LocalDefId, MaybeOwner>,
+}
+
+/// Represents a definition which has been allocated a LocalDefId. Not all
+/// definitions are owners so we refer to them as MaybeOwners.
+///
+/// TODO: Maybe `Definition` would be better?
+#[derive(Debug)]
+pub enum MaybeOwner {
+    Owner(Owner),
+    NonOwner(HirId),
+}
+
+impl MaybeOwner {
+    pub fn as_owner(&self) -> Option<&Owner> {
+        match self {
+            MaybeOwner::Owner(i) => Some(i),
+            MaybeOwner::NonOwner(_) => None,
+        }
+    }
+
+    pub fn as_non_owner(&self) -> Option<HirId> {
+        match self {
+            MaybeOwner::Owner(_) => None,
+            MaybeOwner::NonOwner(id) => Some(*id),
+        }
+    }
+
+    #[track_caller]
+    pub fn unwrap(&self) -> &Owner {
+        self.as_owner().unwrap_or_else(|| panic!("Not a HIR owner"))
+    }
 }
 
 impl Module {
     pub fn get_body(&self, id: BodyId) -> Rc<Body> {
-        let owner = &self.owners[id.hir_id.owner];
+        let MaybeOwner::Owner(owner) = &self.definitions[&id.hir_id.owner] else {
+            unreachable!();
+        };
 
         let Some(body) = &owner.body else {
             panic!("invalid body id");
@@ -44,23 +77,28 @@ impl Module {
     }
 
     pub fn get_bodies(&self) -> impl Iterator<Item = BodyId> {
-        self.owners
-            .iter()
-            .flat_map(|owner| owner.body.as_ref().map(|b| b.id()))
+        self.definitions.values().flat_map(|owner| {
+            owner
+                .as_owner()
+                .map(|o| o.body.as_ref().map(|b| b.id()))
+                .flatten()
+        })
     }
 
-    pub fn get_owner(&self, def_id: LocalDefId) -> &Owner {
-        &self.owners[def_id]
+    pub fn get_owner(&self, def_id: LocalDefId) -> Option<&Owner> {
+        self.definitions[&def_id].as_owner()
     }
 
     pub fn get_owners(&self) -> impl Iterator<Item = LocalDefId> {
-        self.owners.indices()
+        self.definitions
+            .iter()
+            .filter_map(|(id, def)| def.as_owner().map(|_| *id))
     }
 
     /// Finds the parent of the provided node in the tree. Returns None if the
     /// requested ID is an owner and this has no parent
     pub fn get_parent_of(&self, hir_id: HirId) -> Option<Node> {
-        let owner = &self.owners[hir_id.owner];
+        let owner = &self.definitions[&hir_id.owner].unwrap();
         let node = &owner.nodes[hir_id.local_id];
 
         if node.parent == ItemLocalId::INVALID {
@@ -129,6 +167,7 @@ pub enum Node {
     Item(Rc<Item>),
     FunctionParameter(Rc<FunctionParameter>),
     StructField(Rc<StructField>),
+    EnumVariant(Rc<EnumVariant>),
     Expression(Rc<Expression>),
     Block(Rc<Block>),
     Statement(Rc<Statement>),
@@ -145,6 +184,7 @@ impl Node {
             Node::Item(v) => v.hir_id(),
             Node::FunctionParameter(v) => v.hir_id,
             Node::StructField(v) => v.hir_id,
+            Node::EnumVariant(v) => v.hir_id,
             Node::Expression(v) => v.hir_id,
             Node::Block(v) => v.hir_id,
             Node::Statement(v) => v.hir_id,
@@ -161,6 +201,7 @@ impl Node {
             Node::Block(_)
             | Node::FunctionParameter(_)
             | Node::StructField(_)
+            | Node::EnumVariant(_)
             | Node::Statement(_)
             | Node::LetStatement(_)
             | Node::Type(_)
@@ -250,7 +291,7 @@ pub enum ItemKind {
     Enum {
         name: Identifier,
         /// Index in the array corresponds to the variant's value
-        variants: Rc<[Identifier]>,
+        variants: Rc<[Rc<EnumVariant>]>,
     },
     TypeAlias {
         name: Identifier,
@@ -270,6 +311,14 @@ pub struct StructField {
     pub hir_id: HirId,
     pub name: Identifier,
     pub ty: Rc<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub def_id: LocalDefId,
+    pub hir_id: HirId,
+    pub name: Identifier,
     pub span: Span,
 }
 

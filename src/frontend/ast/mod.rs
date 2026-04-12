@@ -96,7 +96,6 @@ pub struct StructField {
     pub name: Identifier,
     pub ty: Box<Type>,
 }
-
 #[derive(Debug)]
 pub struct EnumDefinition {
     pub id: NodeId,
@@ -104,7 +103,14 @@ pub struct EnumDefinition {
     pub visibility: Visibility,
     // TODO: attributes like "repr(uX)"
     pub name: Identifier,
-    pub variants: Vec<Identifier>,
+    pub variants: Vec<EnumVariant>,
+}
+
+#[derive(Debug)]
+pub struct EnumVariant {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: Identifier,
 }
 
 #[derive(Debug)]

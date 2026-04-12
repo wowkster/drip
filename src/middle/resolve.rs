@@ -137,30 +137,30 @@ impl<'ast> Resolver {
     ) -> hir::LocalDefId {
         // TODO: check if this def already exists? may be needed for macro
         // expansion
-        let owner_id = self.next_def_id;
+        let def_id = self.next_def_id;
         self.next_def_id.increment_by(1);
 
-        self.node_to_def_id_map.insert(node_id, owner_id);
-
+        self.node_to_def_id_map.insert(node_id, def_id);
+        
         match kind {
             // value ns
             hir::DefinitionKind::Function
             | hir::DefinitionKind::Constant
             | hir::DefinitionKind::Static => {
                 self.global_value_scope
-                    .insert(name, hir::Resolution::Definition(kind, owner_id));
+                    .insert(name, hir::Resolution::Definition(kind, def_id));
             }
             hir::DefinitionKind::AssociatedFunction => {
                 self.global_method_scopes
                     .entry(ty_name.unwrap())
                     .or_default()
-                    .insert(name, owner_id);
+                    .insert(name, def_id);
             }
             hir::DefinitionKind::EnumVariant => {
                 self.global_enum_member_scopes
                     .entry(ty_name.unwrap())
                     .or_default()
-                    .insert(name, owner_id);
+                    .insert(name, def_id);
             }
             // type ns
             hir::DefinitionKind::Struct
@@ -168,11 +168,11 @@ impl<'ast> Resolver {
             | hir::DefinitionKind::Union
             | hir::DefinitionKind::Alias => {
                 self.global_type_scope
-                    .insert(name, hir::Resolution::Definition(kind, owner_id));
+                    .insert(name, hir::Resolution::Definition(kind, def_id));
             }
         }
 
-        owner_id
+        def_id
     }
 }
 
@@ -289,21 +289,21 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
                     hir::DefinitionKind::Enum,
                 );
 
-                for member in &enum_definition.variants {
+                for variant in &enum_definition.variants {
                     if self
                         .resolver
                         .global_enum_member_scopes
                         .get(&enum_definition.name.symbol)
-                        .is_some_and(|ty_scope| ty_scope.contains_key(&member.symbol))
+                        .is_some_and(|ty_scope| ty_scope.contains_key(&variant.name.symbol))
                     {
                         // TODO: nicer error for duplicate enum members
-                        self.report_duplicate_definition(member.span)
+                        self.report_duplicate_definition(variant.span)
                     }
 
                     self.resolver.create_definition(
-                        item.id,
+                        variant.id,
                         Some(enum_definition.name.symbol),
-                        member.symbol,
+                        variant.name.symbol,
                         hir::DefinitionKind::EnumVariant,
                     );
                 }

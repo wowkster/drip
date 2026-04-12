@@ -240,7 +240,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     source,
                 } => {
                     assembler.load_operand(X86FullRegister::Rax, *source);
-
+                    
                     let ty = &function.registers[destination].ty;
                     let sized_reg = X86FullRegister::Rax.with_size_bytes(ty.layout().size);
 

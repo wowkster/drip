@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     frontend::ast::{
-        ArrayInitializer, EnumDefinition, Static, StructDefinition, StructField,
+        ArrayInitializer, EnumDefinition, EnumVariant, Static, StructDefinition, StructField,
         StructInitializerField,
     },
     middle::resolve::Namespace,
@@ -45,6 +45,10 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_enum_definition(&mut self, enum_definition: &'ast EnumDefinition) {
         walk_enum_definition(self, enum_definition)
+    }
+
+    fn visit_enum_variant(&mut self, enum_variant: &'ast EnumVariant) {
+        walk_enum_variant(self, enum_variant)
     }
 
     fn visit_type_alias(&mut self, type_alias: &'ast TypeAlias) {
@@ -181,9 +185,13 @@ pub fn walk_enum_definition<'a>(
 ) {
     visitor.visit_identifier(&enum_definition.name);
 
-    for member in &enum_definition.variants {
-        visitor.visit_identifier(member);
+    for variant in &enum_definition.variants {
+        visitor.visit_enum_variant(variant);
     }
+}
+
+pub fn walk_enum_variant<'a>(visitor: &mut impl Visitor<'a>, enum_variant: &'a EnumVariant) {
+    visitor.visit_identifier(&enum_variant.name);
 }
 
 pub fn walk_type_alias<'a>(visitor: &mut impl Visitor<'a>, alias: &'a TypeAlias) {
