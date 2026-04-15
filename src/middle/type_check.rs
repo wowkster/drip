@@ -1770,9 +1770,86 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             });
                         }
                     },
-                    TypeKind::Pointer(_) => self
-                        .type_context
-                        .report_bug(expression.span, "todo: pointer auto deref"),
+                    TypeKind::Pointer(inner_ty) => {
+                        if !is_method_call {
+                            self.type_context.report_bug(
+                                expression.span,
+                                "todo: pointer auto deref for field access",
+                            );
+                        }
+
+                        let TypeKind::Struct { def_id, .. } = &**inner_ty else {
+                            self.type_context.report_bug(
+                                expression.span,
+                                "todo: pointer auto deref for non-struct method calls",
+                            );
+                        };
+
+                        // TODO: refactor into common "lower_method_call" for
+                        // Struct and Pointer types
+                        let Some(resolution) = self
+                            .type_context
+                            .module
+                            .get_owners()
+                            .filter_map(|owner_id| {
+                                self.type_context
+                                    .module
+                                    .get_owner(owner_id).unwrap()
+                                    .node()
+                                    .as_item()
+                            })
+                            .find_map(|item| {
+                                let hir::ItemKind::Function {
+                                    name: fn_name,
+                                    signature,
+                                    ..
+                                } = &item.kind
+                                else {
+                                    return None;
+                                };
+
+                                if !(matches!(fn_name.segments[0].resolution, hir::Resolution::Definition(_, id) if id == *def_id)
+                                    && fn_name.segments[1].identifier.symbol == name.symbol)
+                                {
+                                    return None;
+                                }
+
+                                if signature.self_parameter.is_none() {
+                                    // TODO: add a help diagnostic here
+                                    // since it exists but its just not a
+                                    // method
+                                    return None;
+                                }
+
+                                Some(*fn_name.resolution())
+                            })
+                        else {
+                            let err = self.type_context.get_error_type();
+                            self.insert_type(expression.hir_id, err);
+
+                            self.errors.push(TypeError {
+                                origin: TypeConstraintOrigin {
+                                    span: name.span,
+                                    kind: TypeBoundary::FieldAccess,
+                                    #[cfg(feature = "error-backtrace")]
+                                    backtrace: Location::caller(),
+                                },
+                                kind: TypeErrorKind::UnknownMethodCall {
+                                    target: target_ty.clone(),
+                                    name: name.symbol,
+                                },
+                            });
+                            return;
+                        };
+
+                        let ty = self.type_context.compute_hir_resolution_type(resolution);
+
+                        self.method_resolution_map.insert(
+                            expression.hir_id.local_id,
+                            resolution.as_function_definition().unwrap(),
+                        );
+                        self.insert_type(expression.hir_id, ty);
+                    }
                     TypeKind::Slice(inner_ty) => match (name.symbol.value(), *is_method_call) {
                         ("ptr", false) => {
                             let ty = self

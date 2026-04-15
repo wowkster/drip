@@ -537,6 +537,7 @@ impl<'hir> BodyLoweringContext<'hir> {
             //    - pass the pointer as the argument
 
             let self_target_ty = self.type_map.get_type(self_target.hir_id);
+
             match (self_parameter, &*self_target_ty) {
                 (
                     hir::SelfParameter::Owned,
@@ -834,8 +835,20 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
             }
             hir::ExpressionKind::This => {
                 // self is always the 0th argument when present
-                self.expression_to_register_map
-                    .insert(expression.hir_id.local_id, self.arguments[0]);
+                let src_reg = self.arguments[0];
+
+                // if we have a destination register, make a copy into it
+                if let Some(dest_reg) = self.destination_register {
+                    let ty = self.type_map.get_type(expression.hir_id);
+                    let ty = self.lower_type(ty);
+                    self.lower_copy(dest_reg, src_reg, ty);
+
+                    self.expression_to_register_map
+                        .insert(expression.hir_id.local_id, dest_reg);
+                } else {
+                    self.expression_to_register_map
+                        .insert(expression.hir_id.local_id, src_reg);
+                }
             }
             hir::ExpressionKind::Array(hir::ArrayInitializer::Repeated { value, length }) => {
                 todo!()
@@ -1790,6 +1803,32 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // FIXME: coerce array address of operations into slice creation
 
                 // FIXME: create a local copy of a struct when dereferencing
+
+                // when dereferencing a pointer to an aggregate type, this
+                // implicitly means to create a copy of the entire struct
+                if *operator == UnaryOperatorKind::Deref {
+                    let ty = self.type_map.get_type(operand.hir_id);
+                    let reg = self.create_register(ty.clone());
+
+                    if ty.is_aggregate() {
+                        self.push_comment(format!("creating copy from pointer deref"));
+
+                        let ty = self.lower_type(ty);
+                        self.push_instruction(lir::Instruction::AllocStack {
+                            destination: reg,
+                            ty: ty,
+                        });
+                    }
+
+                    self.with_destination(Some(reg), |this| this.visit_expression(arg.clone()));
+
+                    debug_assert_eq!(
+                        self.expression_to_register_map[&arg.hir_id.local_id], reg,
+                        "function arg destination was not respected for expr: {arg:#?}"
+                    );
+
+                    return;
+                }
 
                 self.with_destination(None, |this| {
                     hir::visit::walk_expression(this, expression.clone())

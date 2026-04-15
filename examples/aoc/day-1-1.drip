@@ -1,5 +1,12 @@
+// use core::os::unix::{open, close, exit};
+// use core::mem::uninit;
+
 fn main() {
-    let fd = open("examples/aoc/day-1-1.txt\0", 0, 0); // O_RDONLY
+    let fd = open(
+        "examples/aoc/day-1-1.txt\0",
+        0, // O_RDONLY
+        0
+    );
 
     if fd < 0 {
         print("[main] error opening file: {}\n", fd);
@@ -10,14 +17,14 @@ fn main() {
 
     let mut dial: i32 = 50;
     let mut zero_count: i32 = 0;
-    
+
     while true {
         let len = read_line(fd as u32, &buffer, 32);
 
         if len == 0 {
             print("dial = {}\n", dial);
             print("zero_count = {}\n", zero_count);
-            
+
             close(fd as u32);
             exit(0);
         }
@@ -26,9 +33,9 @@ fn main() {
         let rotation = parse_line(line);
 
         // print("{}\n", rotation);
-        
+
         dial = mod(dial + rotation, 100);
-        
+
         if dial == 0 {
             zero_count = zero_count + 1;
         }

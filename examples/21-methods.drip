@@ -1,0 +1,40 @@
+fn main(argv: [cstr]) {
+    let lexer = Lexer::new("fn main() -> {}");
+    let token = lexer.next();
+
+    print("start = {}\n", token.start);
+}
+
+
+struct Lexer {
+    source: str,
+}
+
+fn Lexer::new(source: str) -> Lexer {
+    Lexer {
+        source: source,
+    }
+}
+
+struct Token {
+    start: u32,
+}
+
+fn Lexer::next(*mut self) -> Token {
+    print("[Lexer::read_word] self = {}\n", self);
+    // print("[Lexer::read_word] (*self).source.ptr = {}\n", (*self).source.ptr);
+    // print("[Lexer::read_word] (*self).source.len = {}\n", (*self).source.len);
+
+    (*self).read_word()
+}
+
+
+fn Lexer::read_word(*mut self) -> Token {
+    print("[Lexer::read_word] self = {}\n", self);
+    // print("[Lexer::read_word] (*self).source.ptr = {}\n", (*self).source.ptr);
+    // print("[Lexer::read_word] (*self).source.len  = {}\n", (*self).source.len);
+
+    Token {
+        start: 67,
+    }
+}

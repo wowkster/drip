@@ -1,0 +1,109 @@
+fn main(%0) {
+.label_0:
+    ; let lexer = ...
+    %1 = alloc { { ptr, i64 } }
+    ; copy arguments to function
+    ; argument 0
+    %2 = alloc { ptr, i64 }
+    %3 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    store %3 <- __$static_alloc_0
+    %4 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    store %4 <- 15
+    call Lexer$N$new(%1, %2)
+    ; copy arguments to function
+    %5 = alloc { i32 }
+    call Lexer$N$next(%5, %1)
+    ret 0
+}
+fn Lexer$N$new(sret %0, %1) {
+.label_0:
+    %2 = alloc { { ptr, i64 } }
+    ; field 0
+    %3 = get_struct_element_ptr %2, { { ptr, i64 } }, 0
+    %4 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    %5 = load %4
+    %6 = get_struct_element_ptr %3, { ptr, i64 }, 0
+    store %6 <- %5
+    %7 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    %8 = load %7
+    %9 = get_struct_element_ptr %3, { ptr, i64 }, 1
+    store %9 <- %8
+    %10 = get_struct_element_ptr %2, { { ptr, i64 } }, 0
+    %11 = get_struct_element_ptr %0, { { ptr, i64 } }, 0
+    %12 = get_struct_element_ptr %10, { ptr, i64 }, 0
+    %13 = load %12
+    %14 = get_struct_element_ptr %11, { ptr, i64 }, 0
+    store %14 <- %13
+    %15 = get_struct_element_ptr %10, { ptr, i64 }, 1
+    %16 = load %15
+    %17 = get_struct_element_ptr %11, { ptr, i64 }, 1
+    store %17 <- %16
+    ret
+}
+fn Lexer$N$next(sret %0, %1) {
+.label_0:
+    %2 = alloc { ptr, i64 }
+    %3 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    store %3 <- __$static_alloc_1
+    %4 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    store %4 <- 26
+    %5 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    %6 = load %5
+    %7 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    %8 = load %7
+    %9 = call __$print_str(%6, %8)
+    %10 = call __$print_i64_hex(%1)
+    %11 = alloc { ptr, i64 }
+    %12 = get_struct_element_ptr %11, { ptr, i64 }, 0
+    store %12 <- __$static_alloc_2
+    %13 = get_struct_element_ptr %11, { ptr, i64 }, 1
+    store %13 <- 1
+    %14 = get_struct_element_ptr %11, { ptr, i64 }, 0
+    %15 = load %14
+    %16 = get_struct_element_ptr %11, { ptr, i64 }, 1
+    %17 = load %16
+    %18 = call __$print_str(%15, %17)
+    %19 = * %1
+    ; copy arguments to function
+    %20 = alloc { i32 }
+    call Lexer$N$read_word(%20, %19)
+    %21 = get_struct_element_ptr %20, { i32 }, 0
+    %22 = load %21
+    %23 = get_struct_element_ptr %0, { i32 }, 0
+    store %23 <- %22
+    ret
+}
+fn Lexer$N$read_word(sret %0, %1) {
+.label_0:
+    %2 = alloc { ptr, i64 }
+    %3 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    store %3 <- __$static_alloc_3
+    %4 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    store %4 <- 26
+    %5 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    %6 = load %5
+    %7 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    %8 = load %7
+    %9 = call __$print_str(%6, %8)
+    %10 = call __$print_i64_hex(%1)
+    %11 = alloc { ptr, i64 }
+    %12 = get_struct_element_ptr %11, { ptr, i64 }, 0
+    store %12 <- __$static_alloc_4
+    %13 = get_struct_element_ptr %11, { ptr, i64 }, 1
+    store %13 <- 1
+    %14 = get_struct_element_ptr %11, { ptr, i64 }, 0
+    %15 = load %14
+    %16 = get_struct_element_ptr %11, { ptr, i64 }, 1
+    %17 = load %16
+    %18 = call __$print_str(%15, %17)
+    %19 = alloc { i32 }
+    ; field 0
+    %20 = get_struct_element_ptr %19, { i32 }, 0
+    %21 = 0
+    store %20 <- %21
+    %22 = get_struct_element_ptr %19, { i32 }, 0
+    %23 = load %22
+    %24 = get_struct_element_ptr %0, { i32 }, 0
+    store %24 <- %23
+    ret
+}

@@ -164,6 +164,7 @@ fn Lexer::next(*mut self) -> Token {
     print("(*self).position = {}\n", (*self).position);
     print("(*self).source.ptr = {}\n", (*self).source.ptr);
     print("(*self).source.len = {}\n", (*self).source.len);
+    print("self = {}\n", self);
 
     while (*self).position < (*self).source.len {
         let c = (*self).source[(*self).position];
@@ -370,6 +371,7 @@ fn Lexer::read_number(*mut self) -> Token {
 fn Lexer::read_word(*mut self) -> Token {
     let start_position = (*self).position;
 
+     print("[Lexer::read_word] self = {}\n", self);
      print("[Lexer::read_word] start_position  = {}\n", start_position);
      print("[Lexer::read_word] (*self).source.len  = {}\n", (*self).source.len);
 

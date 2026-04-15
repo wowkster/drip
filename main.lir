@@ -1,0 +1,1864 @@
+fn main(%0) {
+.label_0:
+    ; let source_file = ...
+    %1 = alloc { ptr, i64 }
+    %2 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    store %2 <- __$static_alloc_0
+    %3 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    store %3 <- 23
+    ; let lexer = ...
+    %4 = alloc { { ptr, i64 }, i64, i64 }
+    ; copy arguments to function
+    ; argument 0
+    %5 = alloc { ptr, i64 }
+    %6 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    %7 = load %6
+    %8 = get_struct_element_ptr %5, { ptr, i64 }, 0
+    store %8 <- %7
+    %9 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    %10 = load %9
+    %11 = get_struct_element_ptr %5, { ptr, i64 }, 1
+    store %11 <- %10
+    call Lexer$N$new(%4, %5)
+    ; let token = ...
+    %12 = alloc { i32, { i64, i64 } }
+    ; copy arguments to function
+    call Lexer$N$next(%12, %4)
+.label_1:
+    %13 = get_struct_element_ptr %12, { i32, { i64, i64 } }, 0
+    %14 = load %13
+    %15 = 56
+    %16 = %14 != %15
+    br %16 .label_2 .label_3
+.label_2:
+    %17 = get_struct_element_ptr %12, { i32, { i64, i64 } }, 0
+    %18 = load %17
+    %19 = get_struct_element_ptr %12, { i32, { i64, i64 } }, 1
+    %20 = %19
+    %21 = get_struct_element_ptr %20, { i64, i64 }, 0
+    %22 = load %21
+    %23 = get_struct_element_ptr %12, { i32, { i64, i64 } }, 1
+    %24 = %23
+    %25 = get_struct_element_ptr %24, { i64, i64 }, 1
+    %26 = load %25
+    %27 = alloc { ptr, i64 }
+    %28 = get_struct_element_ptr %27, { ptr, i64 }, 0
+    store %28 <- __$static_alloc_1
+    %29 = get_struct_element_ptr %27, { ptr, i64 }, 1
+    store %29 <- 7
+    %30 = get_struct_element_ptr %27, { ptr, i64 }, 0
+    %31 = load %30
+    %32 = get_struct_element_ptr %27, { ptr, i64 }, 1
+    %33 = load %32
+    %34 = call __$print_str(%31, %33)
+    %35 = alloc { ptr, i64 }
+    %36 = get_struct_element_ptr %35, { ptr, i64 }, 0
+    store %36 <- __$static_alloc_2
+    %37 = get_struct_element_ptr %35, { ptr, i64 }, 1
+    store %37 <- 9
+    %38 = get_struct_element_ptr %35, { ptr, i64 }, 0
+    %39 = load %38
+    %40 = get_struct_element_ptr %35, { ptr, i64 }, 1
+    %41 = load %40
+    %42 = call __$print_str(%39, %41)
+    %43 = alloc { ptr, i64 }
+    %44 = get_struct_element_ptr %43, { ptr, i64 }, 0
+    store %44 <- __$static_alloc_3
+    %45 = get_struct_element_ptr %43, { ptr, i64 }, 1
+    store %45 <- 10
+    %46 = get_struct_element_ptr %43, { ptr, i64 }, 0
+    %47 = load %46
+    %48 = get_struct_element_ptr %43, { ptr, i64 }, 1
+    %49 = load %48
+    %50 = call __$print_str(%47, %49)
+    %51 = call __$print_u64(%22)
+    %52 = alloc { ptr, i64 }
+    %53 = get_struct_element_ptr %52, { ptr, i64 }, 0
+    store %53 <- __$static_alloc_4
+    %54 = get_struct_element_ptr %52, { ptr, i64 }, 1
+    store %54 <- 8
+    %55 = get_struct_element_ptr %52, { ptr, i64 }, 0
+    %56 = load %55
+    %57 = get_struct_element_ptr %52, { ptr, i64 }, 1
+    %58 = load %57
+    %59 = call __$print_str(%56, %58)
+    %60 = call __$print_u64(%26)
+    %61 = alloc { ptr, i64 }
+    %62 = get_struct_element_ptr %61, { ptr, i64 }, 0
+    store %62 <- __$static_alloc_5
+    %63 = get_struct_element_ptr %61, { ptr, i64 }, 1
+    store %63 <- 1
+    %64 = get_struct_element_ptr %61, { ptr, i64 }, 0
+    %65 = load %64
+    %66 = get_struct_element_ptr %61, { ptr, i64 }, 1
+    %67 = load %66
+    %68 = call __$print_str(%65, %67)
+    ; copy arguments to function
+    %69 = alloc { i32, { i64, i64 } }
+    call Lexer$N$next(%69, %4)
+    %12 = %69
+    jmp .label_1
+.label_3:
+    %70 = alloc { ptr, i64 }
+    %71 = get_struct_element_ptr %70, { ptr, i64 }, 0
+    store %71 <- __$static_alloc_6
+    %72 = get_struct_element_ptr %70, { ptr, i64 }, 1
+    store %72 <- 4
+    %73 = get_struct_element_ptr %70, { ptr, i64 }, 0
+    %74 = load %73
+    %75 = get_struct_element_ptr %70, { ptr, i64 }, 1
+    %76 = load %75
+    %77 = call __$print_str(%74, %76)
+    ret 0
+}
+fn Span$N$new(sret %0, %1, %2) {
+.label_0:
+    %3 = alloc { i64, i64 }
+    ; field 0
+    %4 = get_struct_element_ptr %3, { i64, i64 }, 0
+    %5 = %1
+    store %4 <- %5
+    ; field 1
+    %6 = get_struct_element_ptr %3, { i64, i64 }, 1
+    %7 = %2
+    store %6 <- %7
+    %8 = get_struct_element_ptr %3, { i64, i64 }, 0
+    %9 = load %8
+    %10 = get_struct_element_ptr %0, { i64, i64 }, 0
+    store %10 <- %9
+    %11 = get_struct_element_ptr %3, { i64, i64 }, 1
+    %12 = load %11
+    %13 = get_struct_element_ptr %0, { i64, i64 }, 1
+    store %13 <- %12
+    ret
+}
+fn Lexer$N$new(sret %0, %1) {
+.label_0:
+    %2 = alloc { { ptr, i64 }, i64, i64 }
+    ; field 0
+    %3 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 0
+    %4 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    %5 = load %4
+    %6 = get_struct_element_ptr %3, { ptr, i64 }, 0
+    store %6 <- %5
+    %7 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    %8 = load %7
+    %9 = get_struct_element_ptr %3, { ptr, i64 }, 1
+    store %9 <- %8
+    ; field 1
+    %10 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 1
+    %11 = 0
+    store %10 <- %11
+    ; field 2
+    %12 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 2
+    %13 = 0
+    store %12 <- %13
+    %14 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 0
+    %15 = get_struct_element_ptr %0, { { ptr, i64 }, i64, i64 }, 0
+    %16 = get_struct_element_ptr %14, { ptr, i64 }, 0
+    %17 = load %16
+    %18 = get_struct_element_ptr %15, { ptr, i64 }, 0
+    store %18 <- %17
+    %19 = get_struct_element_ptr %14, { ptr, i64 }, 1
+    %20 = load %19
+    %21 = get_struct_element_ptr %15, { ptr, i64 }, 1
+    store %21 <- %20
+    %22 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 1
+    %23 = load %22
+    %24 = get_struct_element_ptr %0, { { ptr, i64 }, i64, i64 }, 1
+    store %24 <- %23
+    %25 = get_struct_element_ptr %2, { { ptr, i64 }, i64, i64 }, 2
+    %26 = load %25
+    %27 = get_struct_element_ptr %0, { { ptr, i64 }, i64, i64 }, 2
+    store %27 <- %26
+    ret
+}
+fn Lexer$N$next(sret %0, %1) {
+.label_0:
+    %2 = alloc { ptr, i64 }
+    %3 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    store %3 <- __$static_alloc_7
+    %4 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    store %4 <- 13
+    %5 = get_struct_element_ptr %2, { ptr, i64 }, 0
+    %6 = load %5
+    %7 = get_struct_element_ptr %2, { ptr, i64 }, 1
+    %8 = load %7
+    %9 = call __$print_str(%6, %8)
+    %10 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %11 = load %10
+    %12 = alloc { ptr, i64 }
+    %13 = get_struct_element_ptr %12, { ptr, i64 }, 0
+    store %13 <- __$static_alloc_8
+    %14 = get_struct_element_ptr %12, { ptr, i64 }, 1
+    store %14 <- 19
+    %15 = get_struct_element_ptr %12, { ptr, i64 }, 0
+    %16 = load %15
+    %17 = get_struct_element_ptr %12, { ptr, i64 }, 1
+    %18 = load %17
+    %19 = call __$print_str(%16, %18)
+    %20 = call __$print_u64(%11)
+    %21 = alloc { ptr, i64 }
+    %22 = get_struct_element_ptr %21, { ptr, i64 }, 0
+    store %22 <- __$static_alloc_9
+    %23 = get_struct_element_ptr %21, { ptr, i64 }, 1
+    store %23 <- 1
+    %24 = get_struct_element_ptr %21, { ptr, i64 }, 0
+    %25 = load %24
+    %26 = get_struct_element_ptr %21, { ptr, i64 }, 1
+    %27 = load %26
+    %28 = call __$print_str(%25, %27)
+    %29 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %30 = %29
+    %31 = get_struct_element_ptr %30, { ptr, i64 }, 0
+    %32 = load %31
+    %33 = alloc { ptr, i64 }
+    %34 = get_struct_element_ptr %33, { ptr, i64 }, 0
+    store %34 <- __$static_alloc_10
+    %35 = get_struct_element_ptr %33, { ptr, i64 }, 1
+    store %35 <- 21
+    %36 = get_struct_element_ptr %33, { ptr, i64 }, 0
+    %37 = load %36
+    %38 = get_struct_element_ptr %33, { ptr, i64 }, 1
+    %39 = load %38
+    %40 = call __$print_str(%37, %39)
+    %41 = call __$print_i64_hex(%32)
+    %42 = alloc { ptr, i64 }
+    %43 = get_struct_element_ptr %42, { ptr, i64 }, 0
+    store %43 <- __$static_alloc_11
+    %44 = get_struct_element_ptr %42, { ptr, i64 }, 1
+    store %44 <- 1
+    %45 = get_struct_element_ptr %42, { ptr, i64 }, 0
+    %46 = load %45
+    %47 = get_struct_element_ptr %42, { ptr, i64 }, 1
+    %48 = load %47
+    %49 = call __$print_str(%46, %48)
+    %50 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %51 = %50
+    %52 = get_struct_element_ptr %51, { ptr, i64 }, 1
+    %53 = load %52
+    %54 = alloc { ptr, i64 }
+    %55 = get_struct_element_ptr %54, { ptr, i64 }, 0
+    store %55 <- __$static_alloc_12
+    %56 = get_struct_element_ptr %54, { ptr, i64 }, 1
+    store %56 <- 21
+    %57 = get_struct_element_ptr %54, { ptr, i64 }, 0
+    %58 = load %57
+    %59 = get_struct_element_ptr %54, { ptr, i64 }, 1
+    %60 = load %59
+    %61 = call __$print_str(%58, %60)
+    %62 = call __$print_u64(%53)
+    %63 = alloc { ptr, i64 }
+    %64 = get_struct_element_ptr %63, { ptr, i64 }, 0
+    store %64 <- __$static_alloc_13
+    %65 = get_struct_element_ptr %63, { ptr, i64 }, 1
+    store %65 <- 1
+    %66 = get_struct_element_ptr %63, { ptr, i64 }, 0
+    %67 = load %66
+    %68 = get_struct_element_ptr %63, { ptr, i64 }, 1
+    %69 = load %68
+    %70 = call __$print_str(%67, %69)
+    %71 = alloc { ptr, i64 }
+    %72 = get_struct_element_ptr %71, { ptr, i64 }, 0
+    store %72 <- __$static_alloc_14
+    %73 = get_struct_element_ptr %71, { ptr, i64 }, 1
+    store %73 <- 7
+    %74 = get_struct_element_ptr %71, { ptr, i64 }, 0
+    %75 = load %74
+    %76 = get_struct_element_ptr %71, { ptr, i64 }, 1
+    %77 = load %76
+    %78 = call __$print_str(%75, %77)
+    %79 = call __$print_i64_hex(%1)
+    %80 = alloc { ptr, i64 }
+    %81 = get_struct_element_ptr %80, { ptr, i64 }, 0
+    store %81 <- __$static_alloc_15
+    %82 = get_struct_element_ptr %80, { ptr, i64 }, 1
+    store %82 <- 1
+    %83 = get_struct_element_ptr %80, { ptr, i64 }, 0
+    %84 = load %83
+    %85 = get_struct_element_ptr %80, { ptr, i64 }, 1
+    %86 = load %85
+    %87 = call __$print_str(%84, %86)
+.label_1:
+    %88 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %89 = load %88
+    %90 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %91 = %90
+    %92 = get_struct_element_ptr %91, { ptr, i64 }, 1
+    %93 = load %92
+    %94 = %89 < %93
+    br %94 .label_2 .label_88
+.label_2:
+    ; let c = ...
+    %96 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %97 = %96
+    %98 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %99 = load %98
+    %100 = get_struct_element_ptr %97, { ptr, i64 }, 0
+    %101 = load %100
+    %102 = get_array_element_ptr %101, i8, %99
+    %103 = load %102
+    %95 = %103
+    %104 = alloc { ptr, i64 }
+    %105 = get_struct_element_ptr %104, { ptr, i64 }, 0
+    store %105 <- __$static_alloc_16
+    %106 = get_struct_element_ptr %104, { ptr, i64 }, 1
+    store %106 <- 4
+    %107 = get_struct_element_ptr %104, { ptr, i64 }, 0
+    %108 = load %107
+    %109 = get_struct_element_ptr %104, { ptr, i64 }, 1
+    %110 = load %109
+    %111 = call __$print_str(%108, %110)
+    %112 = call __$print_u32(%95)
+    %113 = alloc { ptr, i64 }
+    %114 = get_struct_element_ptr %113, { ptr, i64 }, 0
+    store %114 <- __$static_alloc_17
+    %115 = get_struct_element_ptr %113, { ptr, i64 }, 1
+    store %115 <- 1
+    %116 = get_struct_element_ptr %113, { ptr, i64 }, 0
+    %117 = load %116
+    %118 = get_struct_element_ptr %113, { ptr, i64 }, 1
+    %119 = load %118
+    %120 = call __$print_str(%117, %119)
+    %121 = 127
+    %122 = %95 > %121
+    br %122 .label_3 .label_4
+.label_3:
+    %123 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %124 = get_struct_element_ptr %123, { i32, { i64, i64 } }, 0
+    %125 = 55
+    store %124 <- %125
+    ; field 1
+    %126 = get_struct_element_ptr %123, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %128 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %127 = load %128
+    ; argument 1
+    %130 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %131 = load %130
+    %132 = 1
+    %129 = %131 + %132
+    call Span$N$new(%126, %127, %129)
+    %133 = get_struct_element_ptr %123, { i32, { i64, i64 } }, 0
+    %134 = load %133
+    %135 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %135 <- %134
+    %136 = get_struct_element_ptr %123, { i32, { i64, i64 } }, 1
+    %137 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %138 = get_struct_element_ptr %136, { i64, i64 }, 0
+    %139 = load %138
+    %140 = get_struct_element_ptr %137, { i64, i64 }, 0
+    store %140 <- %139
+    %141 = get_struct_element_ptr %136, { i64, i64 }, 1
+    %142 = load %141
+    %143 = get_struct_element_ptr %137, { i64, i64 }, 1
+    store %143 <- %142
+    ret
+.label_4:
+    ; let has_next = ...
+    %145 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %146 = load %145
+    %147 = 1
+    %148 = %146 + %147
+    %149 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %150 = %149
+    %151 = get_struct_element_ptr %150, { ptr, i64 }, 1
+    %152 = load %151
+    %144 = %148 < %152
+    ; let has_next_2 = ...
+    %154 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %155 = load %154
+    %156 = 2
+    %157 = %155 + %156
+    %158 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %159 = %158
+    %160 = get_struct_element_ptr %159, { ptr, i64 }, 1
+    %161 = load %160
+    %153 = %157 < %161
+    ; let token = ...
+    %162 = alloc { i32, { i64, i64 } }
+    ; copy arguments to function
+    ; argument 0
+    %163 = %95
+    %164 = call is_whitespace(%163)
+    br %164 .label_5 .label_6
+.label_5:
+    %165 = * %1
+    ; copy arguments to function
+    call Lexer$N$ignore_whitespace(%165)
+    jmp .label_1
+    jmp .label_87
+.label_6:
+    %166 = 47
+    %167 = %95 == %166
+    %168 = %167 && %144
+    %169 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %170 = %169
+    %171 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %172 = load %171
+    %173 = 1
+    %174 = %172 + %173
+    %176 = get_struct_element_ptr %170, { ptr, i64 }, 0
+    %177 = load %176
+    %178 = get_array_element_ptr %177, i8, %174
+    %179 = load %178
+    %175 = %179
+    %180 = 47
+    %181 = %175 == %180
+    %182 = %168 && %181
+    br %182 .label_7 .label_8
+.label_7:
+    %183 = * %1
+    ; copy arguments to function
+    call Lexer$N$ignore_line(%183)
+    jmp .label_1
+    jmp .label_86
+.label_8:
+    ; copy arguments to function
+    ; argument 0
+    %184 = %95
+    %185 = call is_digit(%184)
+    %186 = 46
+    %187 = %95 == %186
+    %188 = %187 && %144
+    ; copy arguments to function
+    ; argument 0
+    %190 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %191 = %190
+    %192 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %193 = load %192
+    %194 = 1
+    %195 = %193 + %194
+    %196 = get_struct_element_ptr %191, { ptr, i64 }, 0
+    %197 = load %196
+    %198 = get_array_element_ptr %197, i8, %195
+    %199 = load %198
+    %189 = %199
+    %200 = call is_digit(%189)
+    %201 = %188 && %200
+    %202 = %185 || %201
+    br %202 .label_9 .label_10
+.label_9:
+    %203 = * %1
+    ; copy arguments to function
+    call Lexer$N$read_number(%162, %203)
+    jmp .label_85
+.label_10:
+    ; copy arguments to function
+    ; argument 0
+    %204 = %95
+    %205 = call is_alphabetic(%204)
+    %206 = 95
+    %207 = %95 == %206
+    %208 = %205 || %207
+    br %208 .label_11 .label_12
+.label_11:
+    %209 = * %1
+    ; copy arguments to function
+    call Lexer$N$read_word(%162, %209)
+    jmp .label_84
+.label_12:
+    %210 = 45
+    %211 = %95 == %210
+    %212 = %211 && %144
+    %213 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %214 = %213
+    %215 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %216 = load %215
+    %217 = 1
+    %218 = %216 + %217
+    %220 = get_struct_element_ptr %214, { ptr, i64 }, 0
+    %221 = load %220
+    %222 = get_array_element_ptr %221, i8, %218
+    %223 = load %222
+    %219 = %223
+    %224 = 62
+    %225 = %219 == %224
+    %226 = %212 && %225
+    br %226 .label_13 .label_14
+.label_13:
+    %227 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %228 = 21
+    call Lexer$N$read_double(%162, %227, %228)
+    jmp .label_83
+.label_14:
+    %229 = 58
+    %230 = %95 == %229
+    %231 = %230 && %144
+    %232 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %233 = %232
+    %234 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %235 = load %234
+    %236 = 1
+    %237 = %235 + %236
+    %239 = get_struct_element_ptr %233, { ptr, i64 }, 0
+    %240 = load %239
+    %241 = get_array_element_ptr %240, i8, %237
+    %242 = load %241
+    %238 = %242
+    %243 = 58
+    %244 = %238 == %243
+    %245 = %231 && %244
+    br %245 .label_15 .label_16
+.label_15:
+    %246 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %247 = 20
+    call Lexer$N$read_double(%162, %246, %247)
+    jmp .label_82
+.label_16:
+    %248 = 61
+    %249 = %95 == %248
+    %250 = %249 && %144
+    %251 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %252 = %251
+    %253 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %254 = load %253
+    %255 = 1
+    %256 = %254 + %255
+    %258 = get_struct_element_ptr %252, { ptr, i64 }, 0
+    %259 = load %258
+    %260 = get_array_element_ptr %259, i8, %256
+    %261 = load %260
+    %257 = %261
+    %262 = 61
+    %263 = %257 == %262
+    %264 = %250 && %263
+    br %264 .label_17 .label_18
+.label_17:
+    %265 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %266 = 36
+    call Lexer$N$read_double(%162, %265, %266)
+    jmp .label_81
+.label_18:
+    %267 = 33
+    %268 = %95 == %267
+    %269 = %268 && %144
+    %270 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %271 = %270
+    %272 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %273 = load %272
+    %274 = 1
+    %275 = %273 + %274
+    %277 = get_struct_element_ptr %271, { ptr, i64 }, 0
+    %278 = load %277
+    %279 = get_array_element_ptr %278, i8, %275
+    %280 = load %279
+    %276 = %280
+    %281 = 61
+    %282 = %276 == %281
+    %283 = %269 && %282
+    br %283 .label_19 .label_20
+.label_19:
+    %284 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %285 = 37
+    call Lexer$N$read_double(%162, %284, %285)
+    jmp .label_80
+.label_20:
+    %286 = 60
+    %287 = %95 == %286
+    %288 = %287 && %144
+    %289 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %290 = %289
+    %291 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %292 = load %291
+    %293 = 1
+    %294 = %292 + %293
+    %296 = get_struct_element_ptr %290, { ptr, i64 }, 0
+    %297 = load %296
+    %298 = get_array_element_ptr %297, i8, %294
+    %299 = load %298
+    %295 = %299
+    %300 = 61
+    %301 = %295 == %300
+    %302 = %288 && %301
+    br %302 .label_21 .label_22
+.label_21:
+    %303 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %304 = 39
+    call Lexer$N$read_double(%162, %303, %304)
+    jmp .label_79
+.label_22:
+    %305 = 62
+    %306 = %95 == %305
+    %307 = %306 && %144
+    %308 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %309 = %308
+    %310 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %311 = load %310
+    %312 = 1
+    %313 = %311 + %312
+    %315 = get_struct_element_ptr %309, { ptr, i64 }, 0
+    %316 = load %315
+    %317 = get_array_element_ptr %316, i8, %313
+    %318 = load %317
+    %314 = %318
+    %319 = 61
+    %320 = %314 == %319
+    %321 = %307 && %320
+    br %321 .label_23 .label_24
+.label_23:
+    %322 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %323 = 41
+    call Lexer$N$read_double(%162, %322, %323)
+    jmp .label_78
+.label_24:
+    %324 = 43
+    %325 = %95 == %324
+    %326 = %325 && %144
+    %327 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %328 = %327
+    %329 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %330 = load %329
+    %331 = 1
+    %332 = %330 + %331
+    %334 = get_struct_element_ptr %328, { ptr, i64 }, 0
+    %335 = load %334
+    %336 = get_array_element_ptr %335, i8, %332
+    %337 = load %336
+    %333 = %337
+    %338 = 61
+    %339 = %333 == %338
+    %340 = %326 && %339
+    br %340 .label_25 .label_26
+.label_25:
+    %341 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %342 = 43
+    call Lexer$N$read_double(%162, %341, %342)
+    jmp .label_77
+.label_26:
+    %343 = 45
+    %344 = %95 == %343
+    %345 = %344 && %144
+    %346 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %347 = %346
+    %348 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %349 = load %348
+    %350 = 1
+    %351 = %349 + %350
+    %353 = get_struct_element_ptr %347, { ptr, i64 }, 0
+    %354 = load %353
+    %355 = get_array_element_ptr %354, i8, %351
+    %356 = load %355
+    %352 = %356
+    %357 = 61
+    %358 = %352 == %357
+    %359 = %345 && %358
+    br %359 .label_27 .label_28
+.label_27:
+    %360 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %361 = 44
+    call Lexer$N$read_double(%162, %360, %361)
+    jmp .label_76
+.label_28:
+    %362 = 42
+    %363 = %95 == %362
+    %364 = %363 && %144
+    %365 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %366 = %365
+    %367 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %368 = load %367
+    %369 = 1
+    %370 = %368 + %369
+    %372 = get_struct_element_ptr %366, { ptr, i64 }, 0
+    %373 = load %372
+    %374 = get_array_element_ptr %373, i8, %370
+    %375 = load %374
+    %371 = %375
+    %376 = 61
+    %377 = %371 == %376
+    %378 = %364 && %377
+    br %378 .label_29 .label_30
+.label_29:
+    %379 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %380 = 45
+    call Lexer$N$read_double(%162, %379, %380)
+    jmp .label_75
+.label_30:
+    %381 = 47
+    %382 = %95 == %381
+    %383 = %382 && %144
+    %384 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %385 = %384
+    %386 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %387 = load %386
+    %388 = 1
+    %389 = %387 + %388
+    %391 = get_struct_element_ptr %385, { ptr, i64 }, 0
+    %392 = load %391
+    %393 = get_array_element_ptr %392, i8, %389
+    %394 = load %393
+    %390 = %394
+    %395 = 61
+    %396 = %390 == %395
+    %397 = %383 && %396
+    br %397 .label_31 .label_32
+.label_31:
+    %398 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %399 = 46
+    call Lexer$N$read_double(%162, %398, %399)
+    jmp .label_74
+.label_32:
+    %400 = 37
+    %401 = %95 == %400
+    %402 = %401 && %144
+    %403 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %404 = %403
+    %405 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %406 = load %405
+    %407 = 1
+    %408 = %406 + %407
+    %410 = get_struct_element_ptr %404, { ptr, i64 }, 0
+    %411 = load %410
+    %412 = get_array_element_ptr %411, i8, %408
+    %413 = load %412
+    %409 = %413
+    %414 = 61
+    %415 = %409 == %414
+    %416 = %402 && %415
+    br %416 .label_33 .label_34
+.label_33:
+    %417 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %418 = 47
+    call Lexer$N$read_double(%162, %417, %418)
+    jmp .label_73
+.label_34:
+    %419 = 38
+    %420 = %95 == %419
+    %421 = %420 && %144
+    %422 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %423 = %422
+    %424 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %425 = load %424
+    %426 = 1
+    %427 = %425 + %426
+    %429 = get_struct_element_ptr %423, { ptr, i64 }, 0
+    %430 = load %429
+    %431 = get_array_element_ptr %430, i8, %427
+    %432 = load %431
+    %428 = %432
+    %433 = 61
+    %434 = %428 == %433
+    %435 = %421 && %434
+    br %435 .label_35 .label_36
+.label_35:
+    %436 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %437 = 51
+    call Lexer$N$read_double(%162, %436, %437)
+    jmp .label_72
+.label_36:
+    %438 = 124
+    %439 = %95 == %438
+    %440 = %439 && %144
+    %441 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %442 = %441
+    %443 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %444 = load %443
+    %445 = 1
+    %446 = %444 + %445
+    %448 = get_struct_element_ptr %442, { ptr, i64 }, 0
+    %449 = load %448
+    %450 = get_array_element_ptr %449, i8, %446
+    %451 = load %450
+    %447 = %451
+    %452 = 61
+    %453 = %447 == %452
+    %454 = %440 && %453
+    br %454 .label_37 .label_38
+.label_37:
+    %455 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %456 = 52
+    call Lexer$N$read_double(%162, %455, %456)
+    jmp .label_71
+.label_38:
+    %457 = 94
+    %458 = %95 == %457
+    %459 = %458 && %144
+    %460 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %461 = %460
+    %462 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %463 = load %462
+    %464 = 1
+    %465 = %463 + %464
+    %467 = get_struct_element_ptr %461, { ptr, i64 }, 0
+    %468 = load %467
+    %469 = get_array_element_ptr %468, i8, %465
+    %470 = load %469
+    %466 = %470
+    %471 = 61
+    %472 = %466 == %471
+    %473 = %459 && %472
+    br %473 .label_39 .label_40
+.label_39:
+    %474 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %475 = 50
+    call Lexer$N$read_double(%162, %474, %475)
+    jmp .label_70
+.label_40:
+    %476 = 60
+    %477 = %95 == %476
+    %478 = %477 && %144
+    %479 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %480 = %479
+    %481 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %482 = load %481
+    %483 = 1
+    %484 = %482 + %483
+    %486 = get_struct_element_ptr %480, { ptr, i64 }, 0
+    %487 = load %486
+    %488 = get_array_element_ptr %487, i8, %484
+    %489 = load %488
+    %485 = %489
+    %490 = 60
+    %491 = %485 == %490
+    %492 = %478 && %491
+    %493 = %492 && %153
+    %494 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %495 = %494
+    %496 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %497 = load %496
+    %498 = 2
+    %499 = %497 + %498
+    %501 = get_struct_element_ptr %495, { ptr, i64 }, 0
+    %502 = load %501
+    %503 = get_array_element_ptr %502, i8, %499
+    %504 = load %503
+    %500 = %504
+    %505 = 61
+    %506 = %500 == %505
+    %507 = %493 && %506
+    br %507 .label_41 .label_42
+.label_41:
+    %508 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %509 = 53
+    call Lexer$N$read_triple(%162, %508, %509)
+    jmp .label_69
+.label_42:
+    %510 = 62
+    %511 = %95 == %510
+    %512 = %511 && %144
+    %513 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %514 = %513
+    %515 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %516 = load %515
+    %517 = 1
+    %518 = %516 + %517
+    %520 = get_struct_element_ptr %514, { ptr, i64 }, 0
+    %521 = load %520
+    %522 = get_array_element_ptr %521, i8, %518
+    %523 = load %522
+    %519 = %523
+    %524 = 62
+    %525 = %519 == %524
+    %526 = %512 && %525
+    %527 = %526 && %153
+    %528 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %529 = %528
+    %530 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %531 = load %530
+    %532 = 2
+    %533 = %531 + %532
+    %535 = get_struct_element_ptr %529, { ptr, i64 }, 0
+    %536 = load %535
+    %537 = get_array_element_ptr %536, i8, %533
+    %538 = load %537
+    %534 = %538
+    %539 = 61
+    %540 = %534 == %539
+    %541 = %527 && %540
+    br %541 .label_43 .label_44
+.label_43:
+    %542 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %543 = 54
+    call Lexer$N$read_triple(%162, %542, %543)
+    jmp .label_68
+.label_44:
+    %544 = 60
+    %545 = %95 == %544
+    %546 = %545 && %144
+    %547 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %548 = %547
+    %549 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %550 = load %549
+    %551 = 1
+    %552 = %550 + %551
+    %554 = get_struct_element_ptr %548, { ptr, i64 }, 0
+    %555 = load %554
+    %556 = get_array_element_ptr %555, i8, %552
+    %557 = load %556
+    %553 = %557
+    %558 = 60
+    %559 = %553 == %558
+    %560 = %546 && %559
+    br %560 .label_45 .label_46
+.label_45:
+    %561 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %562 = 34
+    call Lexer$N$read_double(%162, %561, %562)
+    jmp .label_67
+.label_46:
+    %563 = 62
+    %564 = %95 == %563
+    %565 = %564 && %144
+    %566 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %567 = %566
+    %568 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %569 = load %568
+    %570 = 1
+    %571 = %569 + %570
+    %573 = get_struct_element_ptr %567, { ptr, i64 }, 0
+    %574 = load %573
+    %575 = get_array_element_ptr %574, i8, %571
+    %576 = load %575
+    %572 = %576
+    %577 = 62
+    %578 = %572 == %577
+    %579 = %565 && %578
+    br %579 .label_47 .label_48
+.label_47:
+    %580 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %581 = 35
+    call Lexer$N$read_double(%162, %580, %581)
+    jmp .label_66
+.label_48:
+    %582 = 38
+    %583 = %95 == %582
+    %584 = %583 && %144
+    %585 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %586 = %585
+    %587 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %588 = load %587
+    %589 = 1
+    %590 = %588 + %589
+    %592 = get_struct_element_ptr %586, { ptr, i64 }, 0
+    %593 = load %592
+    %594 = get_array_element_ptr %593, i8, %590
+    %595 = load %594
+    %591 = %595
+    %596 = 38
+    %597 = %591 == %596
+    %598 = %584 && %597
+    %599 = %598 && %153
+    %600 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %601 = %600
+    %602 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %603 = load %602
+    %604 = 2
+    %605 = %603 + %604
+    %607 = get_struct_element_ptr %601, { ptr, i64 }, 0
+    %608 = load %607
+    %609 = get_array_element_ptr %608, i8, %605
+    %610 = load %609
+    %606 = %610
+    %611 = 61
+    %612 = %606 == %611
+    %613 = %599 && %612
+    br %613 .label_49 .label_50
+.label_49:
+    %614 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %615 = 48
+    call Lexer$N$read_triple(%162, %614, %615)
+    jmp .label_65
+.label_50:
+    %616 = 124
+    %617 = %95 == %616
+    %618 = %617 && %144
+    %619 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %620 = %619
+    %621 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %622 = load %621
+    %623 = 1
+    %624 = %622 + %623
+    %626 = get_struct_element_ptr %620, { ptr, i64 }, 0
+    %627 = load %626
+    %628 = get_array_element_ptr %627, i8, %624
+    %629 = load %628
+    %625 = %629
+    %630 = 124
+    %631 = %625 == %630
+    %632 = %618 && %631
+    %633 = %632 && %153
+    %634 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %635 = %634
+    %636 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %637 = load %636
+    %638 = 2
+    %639 = %637 + %638
+    %641 = get_struct_element_ptr %635, { ptr, i64 }, 0
+    %642 = load %641
+    %643 = get_array_element_ptr %642, i8, %639
+    %644 = load %643
+    %640 = %644
+    %645 = 61
+    %646 = %640 == %645
+    %647 = %633 && %646
+    br %647 .label_51 .label_52
+.label_51:
+    %648 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %649 = 49
+    call Lexer$N$read_triple(%162, %648, %649)
+    jmp .label_64
+.label_52:
+    %650 = 38
+    %651 = %95 == %650
+    %652 = %651 && %144
+    %653 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %654 = %653
+    %655 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %656 = load %655
+    %657 = 1
+    %658 = %656 + %657
+    %660 = get_struct_element_ptr %654, { ptr, i64 }, 0
+    %661 = load %660
+    %662 = get_array_element_ptr %661, i8, %658
+    %663 = load %662
+    %659 = %663
+    %664 = 38
+    %665 = %659 == %664
+    %666 = %652 && %665
+    br %666 .label_53 .label_54
+.label_53:
+    %667 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %668 = 30
+    call Lexer$N$read_double(%162, %667, %668)
+    jmp .label_63
+.label_54:
+    %669 = 124
+    %670 = %95 == %669
+    %671 = %670 && %144
+    %672 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %673 = %672
+    %674 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %675 = load %674
+    %676 = 1
+    %677 = %675 + %676
+    %679 = get_struct_element_ptr %673, { ptr, i64 }, 0
+    %680 = load %679
+    %681 = get_array_element_ptr %680, i8, %677
+    %682 = load %681
+    %678 = %682
+    %683 = 124
+    %684 = %678 == %683
+    %685 = %671 && %684
+    br %685 .label_55 .label_56
+.label_55:
+    %686 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %687 = 31
+    call Lexer$N$read_double(%162, %686, %687)
+    jmp .label_62
+.label_56:
+    ; let single_tokens = ...
+    %688 = alloc [{ i32, i32 }; 23]
+    %689 = alloc { i32, i32 }
+    ; field 0
+    %690 = get_struct_element_ptr %689, { i32, i32 }, 0
+    %691 = 40
+    store %690 <- %691
+    ; field 1
+    %692 = get_struct_element_ptr %689, { i32, i32 }, 1
+    %693 = 10
+    store %692 <- %693
+    %694 = alloc { i32, i32 }
+    ; field 0
+    %695 = get_struct_element_ptr %694, { i32, i32 }, 0
+    %696 = 41
+    store %695 <- %696
+    ; field 1
+    %697 = get_struct_element_ptr %694, { i32, i32 }, 1
+    %698 = 11
+    store %697 <- %698
+    %699 = alloc { i32, i32 }
+    ; field 0
+    %700 = get_struct_element_ptr %699, { i32, i32 }, 0
+    %701 = 91
+    store %700 <- %701
+    ; field 1
+    %702 = get_struct_element_ptr %699, { i32, i32 }, 1
+    %703 = 12
+    store %702 <- %703
+    %704 = alloc { i32, i32 }
+    ; field 0
+    %705 = get_struct_element_ptr %704, { i32, i32 }, 0
+    %706 = 93
+    store %705 <- %706
+    ; field 1
+    %707 = get_struct_element_ptr %704, { i32, i32 }, 1
+    %708 = 13
+    store %707 <- %708
+    %709 = alloc { i32, i32 }
+    ; field 0
+    %710 = get_struct_element_ptr %709, { i32, i32 }, 0
+    %711 = 123
+    store %710 <- %711
+    ; field 1
+    %712 = get_struct_element_ptr %709, { i32, i32 }, 1
+    %713 = 14
+    store %712 <- %713
+    %714 = alloc { i32, i32 }
+    ; field 0
+    %715 = get_struct_element_ptr %714, { i32, i32 }, 0
+    %716 = 125
+    store %715 <- %716
+    ; field 1
+    %717 = get_struct_element_ptr %714, { i32, i32 }, 1
+    %718 = 15
+    store %717 <- %718
+    %719 = alloc { i32, i32 }
+    ; field 0
+    %720 = get_struct_element_ptr %719, { i32, i32 }, 0
+    %721 = 59
+    store %720 <- %721
+    ; field 1
+    %722 = get_struct_element_ptr %719, { i32, i32 }, 1
+    %723 = 16
+    store %722 <- %723
+    %724 = alloc { i32, i32 }
+    ; field 0
+    %725 = get_struct_element_ptr %724, { i32, i32 }, 0
+    %726 = 44
+    store %725 <- %726
+    ; field 1
+    %727 = get_struct_element_ptr %724, { i32, i32 }, 1
+    %728 = 17
+    store %727 <- %728
+    %729 = alloc { i32, i32 }
+    ; field 0
+    %730 = get_struct_element_ptr %729, { i32, i32 }, 0
+    %731 = 33
+    store %730 <- %731
+    ; field 1
+    %732 = get_struct_element_ptr %729, { i32, i32 }, 1
+    %733 = 22
+    store %732 <- %733
+    %734 = alloc { i32, i32 }
+    ; field 0
+    %735 = get_struct_element_ptr %734, { i32, i32 }, 0
+    %736 = 126
+    store %735 <- %736
+    ; field 1
+    %737 = get_struct_element_ptr %734, { i32, i32 }, 1
+    %738 = 23
+    store %737 <- %738
+    %739 = alloc { i32, i32 }
+    ; field 0
+    %740 = get_struct_element_ptr %739, { i32, i32 }, 0
+    %741 = 46
+    store %740 <- %741
+    ; field 1
+    %742 = get_struct_element_ptr %739, { i32, i32 }, 1
+    %743 = 18
+    store %742 <- %743
+    %744 = alloc { i32, i32 }
+    ; field 0
+    %745 = get_struct_element_ptr %744, { i32, i32 }, 0
+    %746 = 58
+    store %745 <- %746
+    ; field 1
+    %747 = get_struct_element_ptr %744, { i32, i32 }, 1
+    %748 = 19
+    store %747 <- %748
+    %749 = alloc { i32, i32 }
+    ; field 0
+    %750 = get_struct_element_ptr %749, { i32, i32 }, 0
+    %751 = 42
+    store %750 <- %751
+    ; field 1
+    %752 = get_struct_element_ptr %749, { i32, i32 }, 1
+    %753 = 24
+    store %752 <- %753
+    %754 = alloc { i32, i32 }
+    ; field 0
+    %755 = get_struct_element_ptr %754, { i32, i32 }, 0
+    %756 = 45
+    store %755 <- %756
+    ; field 1
+    %757 = get_struct_element_ptr %754, { i32, i32 }, 1
+    %758 = 25
+    store %757 <- %758
+    %759 = alloc { i32, i32 }
+    ; field 0
+    %760 = get_struct_element_ptr %759, { i32, i32 }, 0
+    %761 = 61
+    store %760 <- %761
+    ; field 1
+    %762 = get_struct_element_ptr %759, { i32, i32 }, 1
+    %763 = 42
+    store %762 <- %763
+    %764 = alloc { i32, i32 }
+    ; field 0
+    %765 = get_struct_element_ptr %764, { i32, i32 }, 0
+    %766 = 43
+    store %765 <- %766
+    ; field 1
+    %767 = get_struct_element_ptr %764, { i32, i32 }, 1
+    %768 = 27
+    store %767 <- %768
+    %769 = alloc { i32, i32 }
+    ; field 0
+    %770 = get_struct_element_ptr %769, { i32, i32 }, 0
+    %771 = 47
+    store %770 <- %771
+    ; field 1
+    %772 = get_struct_element_ptr %769, { i32, i32 }, 1
+    %773 = 28
+    store %772 <- %773
+    %774 = alloc { i32, i32 }
+    ; field 0
+    %775 = get_struct_element_ptr %774, { i32, i32 }, 0
+    %776 = 37
+    store %775 <- %776
+    ; field 1
+    %777 = get_struct_element_ptr %774, { i32, i32 }, 1
+    %778 = 29
+    store %777 <- %778
+    %779 = alloc { i32, i32 }
+    ; field 0
+    %780 = get_struct_element_ptr %779, { i32, i32 }, 0
+    %781 = 94
+    store %780 <- %781
+    ; field 1
+    %782 = get_struct_element_ptr %779, { i32, i32 }, 1
+    %783 = 32
+    store %782 <- %783
+    %784 = alloc { i32, i32 }
+    ; field 0
+    %785 = get_struct_element_ptr %784, { i32, i32 }, 0
+    %786 = 38
+    store %785 <- %786
+    ; field 1
+    %787 = get_struct_element_ptr %784, { i32, i32 }, 1
+    %788 = 26
+    store %787 <- %788
+    %789 = alloc { i32, i32 }
+    ; field 0
+    %790 = get_struct_element_ptr %789, { i32, i32 }, 0
+    %791 = 124
+    store %790 <- %791
+    ; field 1
+    %792 = get_struct_element_ptr %789, { i32, i32 }, 1
+    %793 = 33
+    store %792 <- %793
+    %794 = alloc { i32, i32 }
+    ; field 0
+    %795 = get_struct_element_ptr %794, { i32, i32 }, 0
+    %796 = 60
+    store %795 <- %796
+    ; field 1
+    %797 = get_struct_element_ptr %794, { i32, i32 }, 1
+    %798 = 38
+    store %797 <- %798
+    %799 = alloc { i32, i32 }
+    ; field 0
+    %800 = get_struct_element_ptr %799, { i32, i32 }, 0
+    %801 = 62
+    store %800 <- %801
+    ; field 1
+    %802 = get_struct_element_ptr %799, { i32, i32 }, 1
+    %803 = 40
+    store %802 <- %803
+    %804 = get_array_element_ptr %688, { i32, i32 }, 0
+    store %804 <- %689
+    %805 = get_array_element_ptr %688, { i32, i32 }, 1
+    store %805 <- %694
+    %806 = get_array_element_ptr %688, { i32, i32 }, 2
+    store %806 <- %699
+    %807 = get_array_element_ptr %688, { i32, i32 }, 3
+    store %807 <- %704
+    %808 = get_array_element_ptr %688, { i32, i32 }, 4
+    store %808 <- %709
+    %809 = get_array_element_ptr %688, { i32, i32 }, 5
+    store %809 <- %714
+    %810 = get_array_element_ptr %688, { i32, i32 }, 6
+    store %810 <- %719
+    %811 = get_array_element_ptr %688, { i32, i32 }, 7
+    store %811 <- %724
+    %812 = get_array_element_ptr %688, { i32, i32 }, 8
+    store %812 <- %729
+    %813 = get_array_element_ptr %688, { i32, i32 }, 9
+    store %813 <- %734
+    %814 = get_array_element_ptr %688, { i32, i32 }, 10
+    store %814 <- %739
+    %815 = get_array_element_ptr %688, { i32, i32 }, 11
+    store %815 <- %744
+    %816 = get_array_element_ptr %688, { i32, i32 }, 12
+    store %816 <- %749
+    %817 = get_array_element_ptr %688, { i32, i32 }, 13
+    store %817 <- %754
+    %818 = get_array_element_ptr %688, { i32, i32 }, 14
+    store %818 <- %759
+    %819 = get_array_element_ptr %688, { i32, i32 }, 15
+    store %819 <- %764
+    %820 = get_array_element_ptr %688, { i32, i32 }, 16
+    store %820 <- %769
+    %821 = get_array_element_ptr %688, { i32, i32 }, 17
+    store %821 <- %774
+    %822 = get_array_element_ptr %688, { i32, i32 }, 18
+    store %822 <- %779
+    %823 = get_array_element_ptr %688, { i32, i32 }, 19
+    store %823 <- %784
+    %824 = get_array_element_ptr %688, { i32, i32 }, 20
+    store %824 <- %789
+    %825 = get_array_element_ptr %688, { i32, i32 }, 21
+    store %825 <- %794
+    %826 = get_array_element_ptr %688, { i32, i32 }, 22
+    store %826 <- %799
+    ; let i = ...
+    %827 = 0
+.label_57:
+    %828 = 23
+    %829 = %827 < %828
+    br %829 .label_58 .label_61
+.label_58:
+    ; let s = ...
+    %830 = alloc { i32, i32 }
+    %831 = get_array_element_ptr %688, { i32, i32 }, %827
+    %830 = load %831
+    %832 = get_struct_element_ptr %830, { i32, i32 }, 0
+    %833 = load %832
+    %834 = %95 == %833
+    br %834 .label_59 .label_60
+.label_59:
+    %835 = * %1
+    ; copy arguments to function
+    ; argument 0
+    %837 = get_struct_element_ptr %830, { i32, i32 }, 1
+    %836 = load %837
+    %838 = alloc { i32, { i64, i64 } }
+    call Lexer$N$read_single(%838, %835, %836)
+    %839 = get_struct_element_ptr %838, { i32, { i64, i64 } }, 0
+    %840 = load %839
+    %841 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %841 <- %840
+    %842 = get_struct_element_ptr %838, { i32, { i64, i64 } }, 1
+    %843 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %844 = get_struct_element_ptr %842, { i64, i64 }, 0
+    %845 = load %844
+    %846 = get_struct_element_ptr %843, { i64, i64 }, 0
+    store %846 <- %845
+    %847 = get_struct_element_ptr %842, { i64, i64 }, 1
+    %848 = load %847
+    %849 = get_struct_element_ptr %843, { i64, i64 }, 1
+    store %849 <- %848
+    ret
+.label_60:
+    %850 = 1
+    %851 = %827 + %850
+    %827 = %851
+    jmp .label_57
+.label_61:
+    ; field 0
+    %852 = get_struct_element_ptr %162, { i32, { i64, i64 } }, 0
+    %853 = 55
+    store %852 <- %853
+    ; field 1
+    %854 = get_struct_element_ptr %162, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %856 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %855 = load %856
+    ; argument 1
+    %858 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %859 = load %858
+    %860 = 1
+    %857 = %859 + %860
+    call Span$N$new(%854, %855, %857)
+    jmp .label_62
+.label_62:
+    jmp .label_63
+.label_63:
+    jmp .label_64
+.label_64:
+    jmp .label_65
+.label_65:
+    jmp .label_66
+.label_66:
+    jmp .label_67
+.label_67:
+    jmp .label_68
+.label_68:
+    jmp .label_69
+.label_69:
+    jmp .label_70
+.label_70:
+    jmp .label_71
+.label_71:
+    jmp .label_72
+.label_72:
+    jmp .label_73
+.label_73:
+    jmp .label_74
+.label_74:
+    jmp .label_75
+.label_75:
+    jmp .label_76
+.label_76:
+    jmp .label_77
+.label_77:
+    jmp .label_78
+.label_78:
+    jmp .label_79
+.label_79:
+    jmp .label_80
+.label_80:
+    jmp .label_81
+.label_81:
+    jmp .label_82
+.label_82:
+    jmp .label_83
+.label_83:
+    jmp .label_84
+.label_84:
+    jmp .label_85
+.label_85:
+    jmp .label_86
+.label_86:
+    jmp .label_87
+.label_87:
+    %861 = get_struct_element_ptr %162, { i32, { i64, i64 } }, 0
+    %862 = load %861
+    %863 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %863 <- %862
+    %864 = get_struct_element_ptr %162, { i32, { i64, i64 } }, 1
+    %865 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %866 = get_struct_element_ptr %864, { i64, i64 }, 0
+    %867 = load %866
+    %868 = get_struct_element_ptr %865, { i64, i64 }, 0
+    store %868 <- %867
+    %869 = get_struct_element_ptr %864, { i64, i64 }, 1
+    %870 = load %869
+    %871 = get_struct_element_ptr %865, { i64, i64 }, 1
+    store %871 <- %870
+    ret
+    jmp .label_1
+.label_88:
+    %872 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %873 = get_struct_element_ptr %872, { i32, { i64, i64 } }, 0
+    %874 = 56
+    store %873 <- %874
+    ; field 1
+    %875 = get_struct_element_ptr %872, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %877 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %876 = load %877
+    ; argument 1
+    %879 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %878 = load %879
+    call Span$N$new(%875, %876, %878)
+    %880 = get_struct_element_ptr %872, { i32, { i64, i64 } }, 0
+    %881 = load %880
+    %882 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %882 <- %881
+    %883 = get_struct_element_ptr %872, { i32, { i64, i64 } }, 1
+    %884 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %885 = get_struct_element_ptr %883, { i64, i64 }, 0
+    %886 = load %885
+    %887 = get_struct_element_ptr %884, { i64, i64 }, 0
+    store %887 <- %886
+    %888 = get_struct_element_ptr %883, { i64, i64 }, 1
+    %889 = load %888
+    %890 = get_struct_element_ptr %884, { i64, i64 }, 1
+    store %890 <- %889
+    ret
+}
+fn Lexer$N$ignore_whitespace(%0) {
+.label_0:
+    ret
+}
+fn Lexer$N$ignore_line(%0) {
+.label_0:
+    ret
+}
+fn Lexer$N$consume_char(%0) {
+.label_0:
+    %1 = get_struct_element_ptr %0, { { ptr, i64 }, i64, i64 }, 1
+    %2 = load %1
+    %3 = 1
+    %4 = %2 + %3
+    %5 = get_struct_element_ptr %0, { { ptr, i64 }, i64, i64 }, 1
+    store %5 <- %4
+    ret
+}
+fn Lexer$N$read_number(sret %0, %1) {
+.label_0:
+    %2 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %3 = get_struct_element_ptr %2, { i32, { i64, i64 } }, 0
+    %4 = 56
+    store %3 <- %4
+    ; field 1
+    %5 = get_struct_element_ptr %2, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %6 = 0
+    ; argument 1
+    %7 = 0
+    call Span$N$new(%5, %6, %7)
+    %8 = get_struct_element_ptr %2, { i32, { i64, i64 } }, 0
+    %9 = load %8
+    %10 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %10 <- %9
+    %11 = get_struct_element_ptr %2, { i32, { i64, i64 } }, 1
+    %12 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %13 = get_struct_element_ptr %11, { i64, i64 }, 0
+    %14 = load %13
+    %15 = get_struct_element_ptr %12, { i64, i64 }, 0
+    store %15 <- %14
+    %16 = get_struct_element_ptr %11, { i64, i64 }, 1
+    %17 = load %16
+    %18 = get_struct_element_ptr %12, { i64, i64 }, 1
+    store %18 <- %17
+    ret
+}
+fn Lexer$N$read_word(sret %0, %1) {
+.label_0:
+    ; let start_position = ...
+    %3 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %2 = load %3
+    %4 = alloc { ptr, i64 }
+    %5 = get_struct_element_ptr %4, { ptr, i64 }, 0
+    store %5 <- __$static_alloc_18
+    %6 = get_struct_element_ptr %4, { ptr, i64 }, 1
+    store %6 <- 26
+    %7 = get_struct_element_ptr %4, { ptr, i64 }, 0
+    %8 = load %7
+    %9 = get_struct_element_ptr %4, { ptr, i64 }, 1
+    %10 = load %9
+    %11 = call __$print_str(%8, %10)
+    %12 = call __$print_i64_hex(%1)
+    %13 = alloc { ptr, i64 }
+    %14 = get_struct_element_ptr %13, { ptr, i64 }, 0
+    store %14 <- __$static_alloc_19
+    %15 = get_struct_element_ptr %13, { ptr, i64 }, 1
+    store %15 <- 1
+    %16 = get_struct_element_ptr %13, { ptr, i64 }, 0
+    %17 = load %16
+    %18 = get_struct_element_ptr %13, { ptr, i64 }, 1
+    %19 = load %18
+    %20 = call __$print_str(%17, %19)
+    %21 = alloc { ptr, i64 }
+    %22 = get_struct_element_ptr %21, { ptr, i64 }, 0
+    store %22 <- __$static_alloc_20
+    %23 = get_struct_element_ptr %21, { ptr, i64 }, 1
+    store %23 <- 37
+    %24 = get_struct_element_ptr %21, { ptr, i64 }, 0
+    %25 = load %24
+    %26 = get_struct_element_ptr %21, { ptr, i64 }, 1
+    %27 = load %26
+    %28 = call __$print_str(%25, %27)
+    %29 = call __$print_u64(%2)
+    %30 = alloc { ptr, i64 }
+    %31 = get_struct_element_ptr %30, { ptr, i64 }, 0
+    store %31 <- __$static_alloc_21
+    %32 = get_struct_element_ptr %30, { ptr, i64 }, 1
+    store %32 <- 1
+    %33 = get_struct_element_ptr %30, { ptr, i64 }, 0
+    %34 = load %33
+    %35 = get_struct_element_ptr %30, { ptr, i64 }, 1
+    %36 = load %35
+    %37 = call __$print_str(%34, %36)
+    %38 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %39 = %38
+    %40 = get_struct_element_ptr %39, { ptr, i64 }, 1
+    %41 = load %40
+    %42 = alloc { ptr, i64 }
+    %43 = get_struct_element_ptr %42, { ptr, i64 }, 0
+    store %43 <- __$static_alloc_22
+    %44 = get_struct_element_ptr %42, { ptr, i64 }, 1
+    store %44 <- 41
+    %45 = get_struct_element_ptr %42, { ptr, i64 }, 0
+    %46 = load %45
+    %47 = get_struct_element_ptr %42, { ptr, i64 }, 1
+    %48 = load %47
+    %49 = call __$print_str(%46, %48)
+    %50 = call __$print_u64(%41)
+    %51 = alloc { ptr, i64 }
+    %52 = get_struct_element_ptr %51, { ptr, i64 }, 0
+    store %52 <- __$static_alloc_23
+    %53 = get_struct_element_ptr %51, { ptr, i64 }, 1
+    store %53 <- 1
+    %54 = get_struct_element_ptr %51, { ptr, i64 }, 0
+    %55 = load %54
+    %56 = get_struct_element_ptr %51, { ptr, i64 }, 1
+    %57 = load %56
+    %58 = call __$print_str(%55, %57)
+    ; let peek_idx = ...
+    %59 = %2
+.label_1:
+    %60 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %61 = %60
+    %62 = get_struct_element_ptr %61, { ptr, i64 }, 1
+    %63 = load %62
+    %64 = %59 < %63
+    br %64 .label_2 .label_5
+.label_2:
+    ; let c = ...
+    %66 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 0
+    %67 = %66
+    %68 = get_struct_element_ptr %67, { ptr, i64 }, 0
+    %69 = load %68
+    %70 = get_array_element_ptr %69, i8, %59
+    %71 = load %70
+    %65 = %71
+    ; copy arguments to function
+    ; argument 0
+    %72 = %65
+    %73 = call is_alphanumeric(%72)
+    %74 = ! %73
+    %75 = 95
+    %76 = %65 != %75
+    %77 = %74 && %76
+    br %77 .label_3 .label_4
+.label_3:
+    jmp .label_5
+    jmp .label_4
+.label_4:
+    %78 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %79 = load %78
+    %80 = 1
+    %81 = %79 + %80
+    %82 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    store %82 <- %81
+    %83 = 1
+    %84 = %59 + %83
+    %59 = %84
+    jmp .label_1
+.label_5:
+    ; let span = ...
+    %85 = alloc { i64, i64 }
+    ; copy arguments to function
+    ; argument 0
+    %86 = %2
+    ; argument 1
+    %88 = get_struct_element_ptr %1, { { ptr, i64 }, i64, i64 }, 1
+    %87 = load %88
+    call Span$N$new(%85, %86, %87)
+    %89 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %90 = get_struct_element_ptr %89, { i32, { i64, i64 } }, 0
+    %91 = 1
+    store %90 <- %91
+    ; field 1
+    %92 = get_struct_element_ptr %89, { i32, { i64, i64 } }, 1
+    %93 = get_struct_element_ptr %85, { i64, i64 }, 0
+    %94 = load %93
+    %95 = get_struct_element_ptr %92, { i64, i64 }, 0
+    store %95 <- %94
+    %96 = get_struct_element_ptr %85, { i64, i64 }, 1
+    %97 = load %96
+    %98 = get_struct_element_ptr %92, { i64, i64 }, 1
+    store %98 <- %97
+    %99 = get_struct_element_ptr %89, { i32, { i64, i64 } }, 0
+    %100 = load %99
+    %101 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %101 <- %100
+    %102 = get_struct_element_ptr %89, { i32, { i64, i64 } }, 1
+    %103 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %104 = get_struct_element_ptr %102, { i64, i64 }, 0
+    %105 = load %104
+    %106 = get_struct_element_ptr %103, { i64, i64 }, 0
+    store %106 <- %105
+    %107 = get_struct_element_ptr %102, { i64, i64 }, 1
+    %108 = load %107
+    %109 = get_struct_element_ptr %103, { i64, i64 }, 1
+    store %109 <- %108
+    ret
+}
+fn Lexer$N$read_single(sret %0, %1, %2) {
+.label_0:
+    %3 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %4 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %5 = 56
+    store %4 <- %5
+    ; field 1
+    %6 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %7 = 0
+    ; argument 1
+    %8 = 0
+    call Span$N$new(%6, %7, %8)
+    %9 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %10 = load %9
+    %11 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %11 <- %10
+    %12 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    %13 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %14 = get_struct_element_ptr %12, { i64, i64 }, 0
+    %15 = load %14
+    %16 = get_struct_element_ptr %13, { i64, i64 }, 0
+    store %16 <- %15
+    %17 = get_struct_element_ptr %12, { i64, i64 }, 1
+    %18 = load %17
+    %19 = get_struct_element_ptr %13, { i64, i64 }, 1
+    store %19 <- %18
+    ret
+}
+fn Lexer$N$read_double(sret %0, %1, %2) {
+.label_0:
+    %3 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %4 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %5 = 56
+    store %4 <- %5
+    ; field 1
+    %6 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %7 = 0
+    ; argument 1
+    %8 = 0
+    call Span$N$new(%6, %7, %8)
+    %9 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %10 = load %9
+    %11 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %11 <- %10
+    %12 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    %13 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %14 = get_struct_element_ptr %12, { i64, i64 }, 0
+    %15 = load %14
+    %16 = get_struct_element_ptr %13, { i64, i64 }, 0
+    store %16 <- %15
+    %17 = get_struct_element_ptr %12, { i64, i64 }, 1
+    %18 = load %17
+    %19 = get_struct_element_ptr %13, { i64, i64 }, 1
+    store %19 <- %18
+    ret
+}
+fn Lexer$N$read_triple(sret %0, %1, %2) {
+.label_0:
+    %3 = alloc { i32, { i64, i64 } }
+    ; field 0
+    %4 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %5 = 56
+    store %4 <- %5
+    ; field 1
+    %6 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    ; copy arguments to function
+    ; argument 0
+    %7 = 0
+    ; argument 1
+    %8 = 0
+    call Span$N$new(%6, %7, %8)
+    %9 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 0
+    %10 = load %9
+    %11 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 0
+    store %11 <- %10
+    %12 = get_struct_element_ptr %3, { i32, { i64, i64 } }, 1
+    %13 = get_struct_element_ptr %0, { i32, { i64, i64 } }, 1
+    %14 = get_struct_element_ptr %12, { i64, i64 }, 0
+    %15 = load %14
+    %16 = get_struct_element_ptr %13, { i64, i64 }, 0
+    store %16 <- %15
+    %17 = get_struct_element_ptr %12, { i64, i64 }, 1
+    %18 = load %17
+    %19 = get_struct_element_ptr %13, { i64, i64 }, 1
+    store %19 <- %18
+    ret
+}
+fn is_whitespace(%0) {
+.label_0:
+    %1 = 32
+    %2 = %0 == %1
+    %3 = 9
+    %4 = %0 >= %3
+    %5 = 13
+    %6 = %0 <= %5
+    %7 = %4 && %6
+    %8 = %2 || %7
+    ret %8
+}
+fn is_digit(%0) {
+.label_0:
+    %1 = 48
+    %2 = %0 >= %1
+    %3 = 57
+    %4 = %0 <= %3
+    %5 = %2 && %4
+    ret %5
+}
+fn is_alphabetic(%0) {
+.label_0:
+    %1 = 65
+    %2 = %0 >= %1
+    %3 = 90
+    %4 = %0 <= %3
+    %5 = %2 && %4
+    %6 = 97
+    %7 = %0 >= %6
+    %8 = 122
+    %9 = %0 <= %8
+    %10 = %7 && %9
+    %11 = %5 || %10
+    ret %11
+}
+fn is_alphanumeric(%0) {
+.label_0:
+    %1 = alloc { ptr, i64 }
+    %2 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    store %2 <- __$static_alloc_24
+    %3 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    store %3 <- 16
+    %4 = get_struct_element_ptr %1, { ptr, i64 }, 0
+    %5 = load %4
+    %6 = get_struct_element_ptr %1, { ptr, i64 }, 1
+    %7 = load %6
+    %8 = call __$print_str(%5, %7)
+    ; copy arguments to function
+    ; argument 0
+    %9 = %0
+    %10 = call is_alphabetic(%9)
+    ; copy arguments to function
+    ; argument 0
+    %11 = %0
+    %12 = call is_digit(%11)
+    %13 = %10 || %12
+    ret %13
+}

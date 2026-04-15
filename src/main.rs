@@ -201,6 +201,14 @@ fn main() {
             }
         };
 
+        if !output_directory.exists() {
+            eprintln!(
+                "output directory `{}` does not exist",
+                output_directory.display()
+            );
+            std::process::exit(1);
+        }
+
         codegen_module(
             &lir,
             &output_directory.join(output_file),

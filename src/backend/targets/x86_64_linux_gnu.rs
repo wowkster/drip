@@ -307,7 +307,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                         UnaryOperatorKind::Deref => {
                             let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
 
-                            assembler.emit(format!("mov {sized_reg}, [{sized_reg}]"));
+                            assembler.emit(format!("mov {sized_reg}, [rax]"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
                         UnaryOperatorKind::AddressOf { .. } => {
