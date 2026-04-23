@@ -198,6 +198,11 @@ impl TypeKind {
             TypeKind::Float(_) | TypeKind::Infer(TypeVariable::Float(_))
         )
     }
+
+    pub fn is_pointer_like(&self) -> bool {
+        matches!(self, TypeKind::Pointer(_) | TypeKind::Any)
+    }
+
     pub fn is_never(&self) -> bool {
         matches!(self, TypeKind::Never)
     }

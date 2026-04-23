@@ -1,6 +1,8 @@
-fn main(argv: [cstr]) {
     // TODO: read from file
     // let source_file = read_to_vec(argv[1]);
+
+    
+fn main(argv: [cstr]) {
 
     let source_file = "fn main() -> i32 { 67 }";
     let lexer = Lexer::new(source_file);
@@ -10,7 +12,7 @@ fn main(argv: [cstr]) {
     while token.kind != TokenKind::Eof {
         print(
             "kind = {}, start = {}, end = {}\n",
-            token.kind,
+            token_kind_to_string(token.kind),
             token.span.start,
             token.span.end
         );
@@ -151,7 +153,7 @@ struct Lexer {
 fn Lexer::new(source: str) -> Lexer {
     //print("source.ptr = {}\n", source.ptr);
    // print("source.len = {}\n", source.len);
-    
+
     Lexer {
         source: source,
         position: 0,
@@ -160,15 +162,17 @@ fn Lexer::new(source: str) -> Lexer {
 }
 
 fn Lexer::next(*mut self) -> Token {
-    print("calling next\n");
-    print("(*self).position = {}\n", (*self).position);
-    print("(*self).source.ptr = {}\n", (*self).source.ptr);
-    print("(*self).source.len = {}\n", (*self).source.len);
+    // print("calling next\n");
+    // print("(*self).position = {}\n", (*self).position);
+    // print("(*self).source = {}\n", &(*self).source);
+    // print("(*self).source.ptr = {}\n", (*self).source.ptr);
+    // print("(*self).source.len = {}\n", (*self).source.len);
+    // print("self = {}\n", self);
 
     while (*self).position < (*self).source.len {
         let c = (*self).source[(*self).position];
 
-        print("c = {}\n", c as u32);
+        // print("c = {}\n", c as u32);
 
 
         // we only allow ascii chars, return an error if we find anything else
@@ -194,7 +198,7 @@ fn Lexer::next(*mut self) -> Token {
             continue;
         }
         // Integer and float literals
-        else if is_digit(c) || c == '.' && has_next && is_digit((*self).source[(*self).position + 1]) {
+        else if is_digit(c) || (c == '.' && has_next && is_digit((*self).source[(*self).position + 1])) {
             (*self).read_number()
         }
         // Identifiers, keywords, and boolean literals
@@ -334,10 +338,10 @@ fn Lexer::next(*mut self) -> Token {
             }
         };
 
-        // TODO: short circuiting
-
         return token;
     }
+
+
 
     Token {
         kind: TokenKind::Eof,
@@ -347,10 +351,15 @@ fn Lexer::next(*mut self) -> Token {
 
 fn Lexer::ignore_whitespace(*mut self) {
     // TODO
+
+    (*self).position = (*self).position + 1;
+
 }
 
 fn Lexer::ignore_line(*mut self) {
     // TODO
+    (*self).position = (*self).position + 1;
+
 }
 
 fn Lexer::consume_char(*mut self) {
@@ -359,35 +368,52 @@ fn Lexer::consume_char(*mut self) {
 }
 
 fn Lexer::read_number(*mut self) -> Token {
-    // TODO
+    let start_position = (*self).position;
+
+
+    let mut peek_idx = start_position;
+    while peek_idx < (*self).source.len {
+        let c = (*self).source[peek_idx];
+
+        if !is_digit(c) {
+            break;
+        }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
+
+        (*self).position = (*self).position + 1;
+
+        peek_idx = peek_idx + 1;
+    }
+
+    let span = Span::new(start_position, (*self).position);
 
     Token {
-        kind: TokenKind::Eof,
-        span: Span::new(0, 0),
+        kind: TokenKind::IntegerLiteral,
+        span: span,
     }
 }
 
 fn Lexer::read_word(*mut self) -> Token {
     let start_position = (*self).position;
 
-     print("[Lexer::read_word] start_position  = {}\n", start_position);
-     print("[Lexer::read_word] (*self).source.len  = {}\n", (*self).source.len);
+     // print("[Lexer::read_word] self = {}\n", self);
+     // print("[Lexer::read_word] start_position  = {}\n", start_position);
+     // print("[Lexer::read_word] (*self).source.len  = {}\n", (*self).source.len);
 
     let mut peek_idx = start_position;
     while peek_idx < (*self).source.len {
         let c = (*self).source[peek_idx];
-        
+
         //  print("[Lexer::read_word] c = {}\n", c as u32);
         //  print("[Lexer::read_word] is_alphanumeric(c) = {}\n", is_alphanumeric(c) as u8 as u32);
-        
+
 
         if !is_alphanumeric(c) && c != '_' {
            // print("breaking\n");
             break;
-        }; // FIXME: we shouldnt need this semicolon here (parser things this is a function call)
+        }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
 
        // print("consuming\n");
-        
+
         // (*self).consume_char();
         (*self).position = (*self).position + 1;
 
@@ -397,7 +423,7 @@ fn Lexer::read_word(*mut self) -> Token {
     let span = Span::new(start_position, (*self).position);
 
     //    print("read {} chars\n", (*self).position);
-    
+
     // TODO: parse keywords and boolean literals
 
     Token {
@@ -407,25 +433,30 @@ fn Lexer::read_word(*mut self) -> Token {
 }
 
 fn Lexer::read_single(*mut self, kind: TokenKind) -> Token {
-    // TODO
+    let start = (*self).position;
+    (*self).position = (*self).position + 1;
 
     Token {
-        kind: TokenKind::Eof,
-        span: Span::new(0, 0),
+        kind: kind,
+        span: Span::new(start, (*self).position),
     }
 }
 
 fn Lexer::read_double(*mut self, kind: TokenKind) -> Token {
-    // TODO
+    let start = (*self).position;
+    (*self).position = (*self).position + 2;
 
     Token {
-        kind: TokenKind::Eof,
-        span: Span::new(0, 0),
+        kind: kind,
+        span: Span::new(start, (*self).position),
     }
 }
 
 fn Lexer::read_triple(*mut self, kind: TokenKind) -> Token {
     // TODO
+
+    (*self).position = (*self).position + 3;
+
 
     Token {
         kind: TokenKind::Eof,
@@ -448,6 +479,59 @@ fn is_alphabetic(c: char) -> bool {
 }
 
 fn is_alphanumeric(c: char) -> bool {
-    print("is_alphanumeric\n");
+    // print("is_alphanumeric\n");
     is_alphabetic(c) || is_digit(c)
+}
+
+fn token_kind_to_string(kind: TokenKind) -> str {
+
+    if kind == TokenKind::Keyword {
+        "keyword"
+    } else if kind == TokenKind::Identifier {
+         "ident"
+    } else if kind == TokenKind::BooleanLiteral {
+        "bool"
+    } else if kind == TokenKind::ByteLiteral {
+        "byte"
+    } else if kind == TokenKind::CharLiteral {
+        "char"
+    } else if kind == TokenKind::IntegerLiteral {
+        "int"
+    } else if kind == TokenKind::FloatLiteral {
+        "float"
+    } else if kind == TokenKind::StringLiteral {
+        "string"
+    } else if kind == TokenKind::ByteStringLiteral {
+        "byte_string"
+    } else if kind == TokenKind::CStringLiteral {
+        "c_string"
+    } else if kind == TokenKind::OpenParen {
+        "open_paren"
+    } else if kind == TokenKind::CloseParen {
+        "close_paren"
+    } else if kind == TokenKind::OpenBracket {
+        "open_bracket"
+    } else if kind == TokenKind::CloseBracket {
+        "close_bracket"
+    } else if kind == TokenKind::OpenBrace {
+        "open_brace"
+    } else if kind == TokenKind::CloseBrace {
+        "close_brace"
+    } else if kind == TokenKind::Semicolon {
+        "semicolon"
+    } else if kind == TokenKind::Comma {
+        "comma"
+    } else if kind == TokenKind::Dot {
+        "dot"
+    } else if kind == TokenKind::Colon {
+        "colon"
+    } else if kind == TokenKind::DoubleColon {
+        "double_colon"
+    } else if kind == TokenKind::Arrow {
+        "arrow"
+    } else if kind == TokenKind::Eof {
+        "<eof>"
+    } else {
+        "other"
+    }
 }

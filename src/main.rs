@@ -9,7 +9,9 @@ use std::{
 use clap::{CommandFactory, Parser as ClapParser, error::ErrorKind};
 
 use crate::{
-    backend::{CodegenOptions, OutputKind, codegen_module, targets::Target},
+    backend::{
+        CodegenOptions, OutputKind, codegen_module, ssa_destruction::destruct_ssa, targets::Target,
+    },
     frontend::{SourceFile, SourceFileOrigin, parser::Parser},
     middle::{
         hir::ast_lowering::lower_to_hir,
@@ -43,6 +45,8 @@ pub enum EmitFormat {
     Object,
     #[value(name = "asm")]
     Assembly,
+    #[value(name = "lir_no_phi")]
+    LirNoPhi,
     #[value(name = "lir")]
     Lir,
     #[value(name = "hir")]
@@ -143,6 +147,17 @@ fn main() {
             return;
         }
 
+        for function in lir.function_definitions.values_mut() {
+            destruct_ssa(function);
+        }
+
+        if args.emit == Some(EmitFormat::LirNoPhi) {
+            for function in lir.function_definitions.values() {
+                pretty_print_lir(function);
+            }
+            return;
+        }
+
         // If an emit format is specified, we have to use that. Otherwise we
         // infer based on the output name
         let specified_output_kind = args.emit.map(|e| match e {
@@ -200,6 +215,14 @@ fn main() {
                 )
             }
         };
+
+        if !output_directory.exists() {
+            eprintln!(
+                "output directory `{}` does not exist",
+                output_directory.display()
+            );
+            std::process::exit(1);
+        }
 
         codegen_module(
             &lir,

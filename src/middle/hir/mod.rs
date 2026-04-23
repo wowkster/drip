@@ -597,6 +597,10 @@ pub struct Path {
 }
 
 impl Path {
+    pub fn hir_id(&self) -> HirId {
+        self.segments.last().as_ref().unwrap().hir_id
+    }
+
     /// Returns the final resolution in the path (last segment)
     pub fn resolution(&self) -> &Resolution {
         &self.segments.last().as_ref().unwrap().resolution

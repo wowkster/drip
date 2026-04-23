@@ -1,5 +1,5 @@
 //! Most basic example which showcases the `print` instrinsic function
 
-fn main()  {
-    print("Hello, World!\n");
+fn main() {
+   print("Hello, World!\n");
 }

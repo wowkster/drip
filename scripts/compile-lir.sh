@@ -2,4 +2,4 @@
 
 set -e
 
-cargo run -- -e lir examples/$1.drip
+cargo run -- -e lir $1.drip

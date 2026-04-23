@@ -5,7 +5,7 @@ use itertools::Itertools;
 use crate::{
     backend::{
         CodegenOptions,
-        assemblers::x86_64::{Assembler, X86FullRegister},
+        assemblers::x86_64::{Assembler, X86FullRegister, X86Register},
         targets::CodeGenerator,
     },
     frontend::ast::{BinaryOperatorKind, UnaryOperatorKind},
@@ -223,7 +223,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
             ARG_REGS[starting_arg_index + i].with_size_bytes(ty.layout().size),
         ));
     }
-    
+
     // TODO: move arguments passed on the stack into local registers
 
     /* Intermediate Blocks */
@@ -240,7 +240,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     source,
                 } => {
                     assembler.load_operand(X86FullRegister::Rax, *source);
-                    
+
                     let ty = &function.registers[destination].ty;
                     let sized_reg = X86FullRegister::Rax.with_size_bytes(ty.layout().size);
 
@@ -284,19 +284,32 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     assembler.emit("lea rax, [rax + rbx]");
                     assembler.store_operand(*destination, X86FullRegister::Rax);
                 }
-                lir::Instruction::Move {
-                    destination,
-                    source,
-                } => {
-                    assembler.load_operand(X86FullRegister::Rax, *source);
-                    assembler.store_operand(*destination, X86FullRegister::Rax);
-                }
                 lir::Instruction::IntegerCast {
                     kind,
                     destination,
                     operand,
                 } => {
-                    todo!("emit asm for integer cast")
+                    let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
+
+                    match kind {
+                        lir::IntegerCastKind::SignExtension => {
+                            assembler.emit("cdqe");
+                        }
+                        lir::IntegerCastKind::ZeroExtension => {
+                            if sized_reg == X86Register::Eax {
+                                // implicitly clears upper bits of rax
+                                assembler.emit("mov eax, eax");
+                            } else {
+                                assembler.emit(format!("movzx rax, {}", sized_reg));
+                            }
+                        }
+                        lir::IntegerCastKind::Truncate => {
+                            // nothing to do here since we'll only store the
+                            // bottom bits
+                        }
+                    }
+
+                    assembler.store_operand(*destination, X86FullRegister::Rax);
                 }
                 lir::Instruction::UnaryOperation {
                     operator,
@@ -304,30 +317,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                     operand,
                 } => {
                     match operator {
-                        UnaryOperatorKind::Deref => {
-                            let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
-
-                            assembler.emit(format!("mov {sized_reg}, [{sized_reg}]"));
-                            assembler.store_operand(*destination, X86FullRegister::Rax);
-                        }
-                        UnaryOperatorKind::AddressOf { .. } => {
-                            match operand {
-                                lir::Operand::Register(reg_id) => {
-                                    assembler.load_register_address(X86FullRegister::Rax, *reg_id);
-                                }
-                                lir::Operand::Immediate(lir::Immediate::NamedStaticLabel(
-                                    label,
-                                )) => {
-                                    assembler.emit(format!("mov rax, {label}"));
-                                }
-                                lir::Operand::Immediate(immediate) => {
-                                    unreachable!("cannot take address of immediate: {immediate:?}")
-                                }
-                            }
-
-                            assembler.store_operand(*destination, X86FullRegister::Rax);
-                        }
-                        UnaryOperatorKind::LogicalNot => {
+                        lir::UnaryOperatorKind::LogicalNot => {
                             let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
 
                             assembler.emit("xor rcx, rcx"); // FIXME: necessary?
@@ -335,13 +325,13 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                             assembler.emit("sete cl");
                             assembler.store_operand(*destination, X86FullRegister::Rcx);
                         }
-                        UnaryOperatorKind::BitwiseNot => {
+                        lir::UnaryOperatorKind::BitwiseNot => {
                             let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
 
                             assembler.emit(format!("not {sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
                         }
-                        UnaryOperatorKind::Negate => {
+                        lir::UnaryOperatorKind::Negate => {
                             let sized_reg = assembler.load_operand(X86FullRegister::Rax, *operand);
 
                             assembler.emit(format!("neg {sized_reg}"));
@@ -459,7 +449,7 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
 
                             assembler.emit(format!("or {lhs_sized_reg}, {rhs_sized_reg}"));
                             assembler.store_operand(*destination, X86FullRegister::Rax);
-                        },
+                        }
                         BinaryOperatorKind::BitwiseAnd => todo!(),
                         BinaryOperatorKind::BitwiseOr => todo!(),
                         BinaryOperatorKind::BitwiseXor => todo!(),
@@ -589,6 +579,13 @@ fn codegen_function(function: &lir::FunctionDefinition, options: &CodegenOptions
                 }
                 lir::Instruction::Phi { .. } => {
                     unreachable!("phi instructions should be eliminated before codegen")
+                }
+                lir::Instruction::Copy {
+                    destination,
+                    source,
+                } => {
+                    assembler.load_operand(X86FullRegister::Rax, *source);
+                    assembler.store_operand(*destination, X86FullRegister::Rax);
                 }
                 lir::Instruction::Comment(text) => {
                     if options.emit_debug_info {

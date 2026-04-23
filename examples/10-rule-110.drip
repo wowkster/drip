@@ -58,7 +58,7 @@ fn Int32Vec::from_slice(ptr: *[i32; 15], len: usize) -> Int32Vec {
         exit(1);
     }
 
-    memcpy(new_ptr as *any, (*(ptr as *any as *usize)) as *any, len * 4);
+    memcpy(new_ptr as *any, ptr as *any, len * 4);
 
     Int32Vec {
         ptr: new_ptr,

@@ -88,19 +88,16 @@ impl core::fmt::Display for lir::Instruction {
                 "get_array_element_ptr".cyan(),
                 index.to_string().purple()
             ),
-            lir::Instruction::Move {
-                destination,
-                source,
-            } => {
-                write!(f, "{destination} {} {source}", "=".white())
-            }
             lir::Instruction::IntegerCast {
                 kind,
                 destination,
                 operand,
-            } => {
-                todo!()
-            }
+            } => write!(
+                f,
+                "{destination} {} {} {operand}",
+                "=".white(),
+                format!("{kind}").cyan()
+            ),
             lir::Instruction::UnaryOperation {
                 operator,
                 destination,
@@ -188,6 +185,12 @@ impl core::fmt::Display for lir::Instruction {
                 )?;
 
                 write!(f, "{}", ")".white())
+            }
+            lir::Instruction::Copy {
+                destination,
+                source,
+            } => {
+                write!(f, "{} = {} {}", destination, "copy".bright_green(), source)
             }
             lir::Instruction::Comment(text) => {
                 write!(f, "{} {}", ";".bright_black(), text.bright_black())

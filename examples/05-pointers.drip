@@ -5,10 +5,10 @@ fn main() {
 
     modify(&num);
     
-    println("{}", num);
+    print("Output: {}\n", num);
 }
 
-fn modify(ptr: *i32, optional: bool = true) {
+fn modify(ptr: *i32) {
     let a = 1;
     let b = &a;
     

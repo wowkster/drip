@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     frontend::{
-        ast::{BinaryOperatorKind, UnaryOperatorKind},
+        ast::{self, BinaryOperatorKind},
         intern::InternedSymbol,
     },
     index::simple_index,
@@ -78,6 +78,12 @@ impl Block {
             .last()
             .is_some_and(|i| matches!(i, Instruction::Return { .. }))
     }
+
+    pub fn falls_through(&self) -> bool {
+        self.instructions
+            .last()
+            .is_none_or(|i| !matches!(i, Instruction::Jump { .. } | Instruction::Branch { .. }))
+    }
 }
 
 simple_index! {
@@ -92,7 +98,7 @@ impl BlockId {
     pub const PLACEHOLDER: Self = Self(u32::MAX);
 }
 
-/// A temporary virtual register of some size and alignment
+/// A temporary virtual SSA register of some size and alignment
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Register {
     pub id: RegisterId,
@@ -123,6 +129,27 @@ impl Type {
         match self {
             Type::Struct(_) | Type::Array(_, _) => Self::Pointer,
             scalar => scalar.clone(),
+        }
+    }
+
+    fn as_struct(&self) -> Option<&Struct> {
+        match self {
+            Type::Struct(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn is_scalar(&self) -> bool {
+        match self {
+            Type::Integer(_) | Type::Float(_) | Type::Pointer => true,
+            Type::Struct(_) | Type::Array(_, _) => false,
+        }
+    }
+
+    fn is_aggregate(&self) -> bool {
+        match self {
+            Type::Struct(_) | Type::Array(_, _) => true,
+            Type::Integer(_) | Type::Float(_) | Type::Pointer => false,
         }
     }
 }
@@ -242,10 +269,6 @@ pub enum Instruction {
         /// Must be a valid index into the array (UB otherwise)
         index: Operand,
     },
-    Move {
-        destination: RegisterId,
-        source: Operand,
-    },
     IntegerCast {
         kind: IntegerCastKind,
         destination: RegisterId,
@@ -258,8 +281,8 @@ pub enum Instruction {
     },
     // TODO: math ops (only some are sign sensitive)
     BinaryOperation {
-        operator: BinaryOperatorKind,
         destination: RegisterId,
+        operator: BinaryOperatorKind,
         lhs: Operand,
         rhs: Operand,
     },
@@ -282,7 +305,12 @@ pub enum Instruction {
     },
     Phi {
         destination: RegisterId,
-        sources: BTreeMap<BlockId, RegisterId>,
+        sources: BTreeMap<BlockId, Operand>,
+    },
+    /// Emitted during SSA destruction to copy a value into a virtual register
+    Copy {
+        destination: RegisterId,
+        source: Operand,
     },
     Comment(String),
 }
@@ -310,11 +338,39 @@ pub enum Operand {
     Register(RegisterId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::Display)]
 pub enum IntegerCastKind {
+    #[strum(serialize = "sext")]
     SignExtension,
+    #[strum(serialize = "zext")]
     ZeroExtension,
+    #[strum(serialize = "trunc")]
     Truncate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::Display)]
+pub enum UnaryOperatorKind {
+    #[strum(serialize = "!")]
+    LogicalNot,
+    #[strum(serialize = "~")]
+    BitwiseNot,
+    #[strum(serialize = "-")]
+    Negate,
+}
+
+impl TryFrom<ast::UnaryOperatorKind> for UnaryOperatorKind {
+    type Error = ();
+
+    fn try_from(value: ast::UnaryOperatorKind) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ast::UnaryOperatorKind::LogicalNot => Self::LogicalNot,
+            ast::UnaryOperatorKind::BitwiseNot => Self::BitwiseNot,
+            ast::UnaryOperatorKind::Negate => Self::Negate,
+            ast::UnaryOperatorKind::Deref | ast::UnaryOperatorKind::AddressOf { .. } => {
+                return Err(());
+            }
+        })
+    }
 }
 
 #[derive(Debug)]

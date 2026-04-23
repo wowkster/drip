@@ -12,6 +12,7 @@ use crate::{
 
 pub mod assemblers;
 pub mod targets;
+pub mod ssa_destruction;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum OutputKind {
