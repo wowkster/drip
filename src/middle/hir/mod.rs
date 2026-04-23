@@ -441,6 +441,7 @@ pub enum ExpressionKind {
     FieldAccess {
         target: Rc<Expression>,
         name: Identifier,
+        dereference: bool,
         is_method_call: bool,
     },
     FunctionCall {

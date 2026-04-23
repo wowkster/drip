@@ -825,7 +825,7 @@ impl<'source> Parser<'source> {
     /// unary          -> ( "!" | "~" | "-" | "*" ) unary
     ///                   | function_call
     /// function_call  -> postfix ( "(" ( expression ( "," expression )* )? ")" )*
-    /// postfix        -> block ( "." IDENTIFIER )*
+    /// postfix        -> block ( ( "." | "->" ) IDENTIFIER )*
     /// block          -> BLOCK
     ///                   | "if" expression BLOCK ( "else" expression )?
     ///                   | "while" expression BLOCK
@@ -1406,12 +1406,14 @@ impl<'source> Parser<'source> {
     fn parse_postfix_expression(&mut self) -> Expression {
         let mut expression = self.parse_expression_with_block();
 
-        while self
-            .expect_peek("dot, open parenthesis, semicolon, or closing brace")
-            .kind
-            == TokenKind::Dot
-        {
-            self.expect_next_to_be(TokenKind::Dot);
+        while [TokenKind::Dot, TokenKind::Arrow].contains(
+            &self
+                .expect_peek("dot, arrow,open parenthesis, semicolon, or closing brace")
+                .kind,
+        ) {
+            let token = self.expect_next("dot or arrow");
+            let dereference = token.kind == TokenKind::Arrow;
+
             let name = self.parse_identifier();
 
             expression = Expression {
@@ -1420,6 +1422,7 @@ impl<'source> Parser<'source> {
                 kind: ExpressionKind::FieldAccess {
                     target: Box::new(expression),
                     name,
+                    dereference,
                     is_method_call: false,
                 },
             }

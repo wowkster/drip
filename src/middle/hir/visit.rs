@@ -319,6 +319,7 @@ pub fn walk_expression(visitor: &mut impl Visitor, expression: Rc<Expression>) {
         ExpressionKind::FieldAccess {
             target,
             name,
+            dereference: _,
             is_method_call: _,
         } => {
             visitor.visit_expression(target.clone());

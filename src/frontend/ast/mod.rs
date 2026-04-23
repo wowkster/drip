@@ -261,6 +261,9 @@ pub enum ExpressionKind {
     FieldAccess {
         target: Box<Expression>,
         name: Identifier,
+        /// true if the field is accessed via a dereference operator "->", false
+        /// if it is accessed via a dot operator "."
+        dereference: bool,
         is_method_call: bool,
     },
     FunctionCall {

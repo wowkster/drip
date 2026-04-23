@@ -1,20 +1,35 @@
     // TODO: read from file
     // let source_file = read_to_vec(argv[1]);
 
-    
+
 fn main(argv: [cstr]) {
 
     let source_file = "fn main() -> i32 { 67 }";
     let lexer = Lexer::new(source_file);
 
+    print("tokenizing source file: '{}'\n", source_file);
+
     let mut token: Token = lexer.next();
 
     while token.kind != TokenKind::Eof {
+        let token_str = token_kind_to_string(token.kind);
+
         print(
-            "kind = {}, start = {}, end = {}\n",
-            token_kind_to_string(token.kind),
+            "kind = {},",
+            token_kind_to_string(token.kind)
+        );
+
+        let mut i = 12 - token_str.len;
+        while i > 0 {
+            print(" ");
+            i = i - 1;
+        }
+
+        print(
+            "start = {}, end = {}, text = '{}'\n",
             token.span.start,
-            token.span.end
+            token.span.end,
+            str(&source_file[token.span.start] as *u8, token.span.end - token.span.start)
         );
 
         token = lexer.next();
@@ -151,9 +166,6 @@ struct Lexer {
 // }
 
 fn Lexer::new(source: str) -> Lexer {
-    //print("source.ptr = {}\n", source.ptr);
-   // print("source.len = {}\n", source.len);
-
     Lexer {
         source: source,
         position: 0,
@@ -162,136 +174,127 @@ fn Lexer::new(source: str) -> Lexer {
 }
 
 fn Lexer::next(*mut self) -> Token {
-    // print("calling next\n");
-    // print("(*self).position = {}\n", (*self).position);
-    // print("(*self).source = {}\n", &(*self).source);
-    // print("(*self).source.ptr = {}\n", (*self).source.ptr);
-    // print("(*self).source.len = {}\n", (*self).source.len);
-    // print("self = {}\n", self);
 
-    while (*self).position < (*self).source.len {
-        let c = (*self).source[(*self).position];
-
-        // print("c = {}\n", c as u32);
-
+    while self->position < self->source.len {
+        let c = self->source[self->position];
 
         // we only allow ascii chars, return an error if we find anything else
         if c as u32 > 127 {
             return Token {
                 kind: TokenKind::Error,
-                span: Span::new((*self).position, (*self).position + 1),
+                span: Span::new(self->position, self->position + 1),
             };
         }
 
-        let has_next = (*self).position + 1 < (*self).source.len;
-        let has_next_2 = (*self).position + 2 < (*self).source.len;
+        let has_next = self->position + 1 < self->source.len;
+        let has_next_2 = self->position + 2 < self->source.len;
 
         let token: Token =
         // Ignore whitespace
         if is_whitespace(c) {
-            (*self).ignore_whitespace();
+            self->ignore_whitespace();
             continue;
         }
         // Ignore comments
-        else if c == '/' && has_next &&  (*self).source[(*self).position + 1] == '/' {
-            (*self).ignore_line();
+        else if c == '/' && has_next &&  self->source[self->position + 1] == '/' {
+            self->ignore_line();
             continue;
         }
         // Integer and float literals
-        else if is_digit(c) || (c == '.' && has_next && is_digit((*self).source[(*self).position + 1])) {
-            (*self).read_number()
+        else if is_digit(c) || (c == '.' && has_next && is_digit(self->source[self->position + 1])) {
+            self->read_number()
         }
         // Identifiers, keywords, and boolean literals
         else if is_alphabetic(c) || c == '_' {
-            (*self).read_word()
+            self->read_word()
         }
         // Arrow (->)
-        else if c == '-' && has_next && (*self).source[(*self).position + 1] == '>' {
-            (*self).read_double(TokenKind::Arrow)
+        else if c == '-' && has_next && self->source[self->position + 1] == '>' {
+            self->read_double(TokenKind::Arrow)
         }
         // Double colon (::)
-        else if c == ':' && has_next && (*self).source[(*self).position + 1] == ':' {
-            (*self).read_double(TokenKind::DoubleColon)
+        else if c == ':' && has_next && self->source[self->position + 1] == ':' {
+            self->read_double(TokenKind::DoubleColon)
         }
         // Double Equals (==)
-        else if c == '=' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::DoubleEquals)
+        else if c == '=' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::DoubleEquals)
         }
         // Not Equals (!=)
-        else if c == '!' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::NotEquals)
+        else if c == '!' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::NotEquals)
         }
         // Less than or equal (<=)
-        else if c == '<' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::LessThanOrEqualTo)
+        else if c == '<' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::LessThanOrEqualTo)
         }
         // Greater than or equal (>=)
-        else if c == '>' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::GreaterThanOrEqualTo)
+        else if c == '>' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::GreaterThanOrEqualTo)
         }
         // Plus equals (+=)
-        else if c == '+' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::PlusEquals)
+        else if c == '+' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::PlusEquals)
         }
         // Minus equals (-=)
-        else if c == '-' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::MinusEquals)
+        else if c == '-' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::MinusEquals)
         }
         // Multiply equals (*=)
-        else if c == '*' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::MultiplyEquals)
+        else if c == '*' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::MultiplyEquals)
         }
         // Divide equals (/=)
-        else if c == '/' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::DivideEquals)
+        else if c == '/' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::DivideEquals)
         }
         // Modulus equals (%=)
-        else if c == '%' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::ModulusEquals)
+        else if c == '%' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::ModulusEquals)
         }
         // Bitwise and equals (&=)
-        else if c == '&' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::BitwiseAndEquals)
+        else if c == '&' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::BitwiseAndEquals)
         }
         // Bitwise or equals (|=)
-        else if c == '|' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::BitwiseOrEquals)
+        else if c == '|' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::BitwiseOrEquals)
         }
         // Bitwise xor equals (^=)
-        else if c == '^' && has_next && (*self).source[(*self).position + 1] == '=' {
-            (*self).read_double(TokenKind::BitwiseXorEquals)
+        else if c == '^' && has_next && self->source[self->position + 1] == '=' {
+            self->read_double(TokenKind::BitwiseXorEquals)
         }
         // Shift left equals (<<=)
-        else if c == '<' && has_next && (*self).source[(*self).position + 1] == '<' && has_next_2 && (*self).source [(*self).position + 2] == '=' {
-            (*self).read_triple(TokenKind::ShiftLeftEquals)
+        else if c == '<' && has_next && self->source[self->position + 1] == '<' && has_next_2 && self->source [self->position + 2] == '=' {
+            self->read_triple(TokenKind::ShiftLeftEquals)
         }
         // Shift right equals (>>=)
-        else if c == '>' && has_next && (*self).source[(*self).position + 1] == '>' && has_next_2 && (*self).source [(*self).position + 2] == '=' {
-            (*self).read_triple(TokenKind::ShiftRightEquals)
+        else if c == '>' && has_next && self->source[self->position + 1] == '>' && has_next_2 && self->source [self->position + 2] == '=' {
+            self->read_triple(TokenKind::ShiftRightEquals)
         }
         // Shift left (<<)
-        else if c == '<' && has_next && (*self).source[(*self).position + 1] == '<' {
-            (*self).read_double(TokenKind::ShiftLeft)
+        else if c == '<' && has_next && self->source[self->position + 1] == '<' {
+            self->read_double(TokenKind::ShiftLeft)
         }
         // Shift right (>>)
-        else if c == '>' && has_next && (*self).source[(*self).position + 1] == '>' {
-            (*self).read_double(TokenKind::ShiftRight)
+        else if c == '>' && has_next && self->source[self->position + 1] == '>' {
+            self->read_double(TokenKind::ShiftRight)
         }
         // Logical and equals (&&=)
-        else if c == '&' && has_next && (*self).source[(*self).position + 1] == '&' && has_next_2 && (*self).source [(*self).position + 2] == '=' {
-            (*self).read_triple(TokenKind::LogicalAndEquals)
+        else if c == '&' && has_next && self->source[self->position + 1] == '&' && has_next_2 && self->source [self->position + 2] == '=' {
+            self->read_triple(TokenKind::LogicalAndEquals)
         }
         // Logical or equals (||=)
-        else if c == '|' && has_next && (*self).source[(*self).position + 1] == '|' && has_next_2 && (*self).source [(*self).position + 2] == '=' {
-            (*self).read_triple(TokenKind::LogicalOrEquals)
+        else if c == '|' && has_next && self->source[self->position + 1] == '|' && has_next_2 && self->source [self->position + 2] == '=' {
+            self->read_triple(TokenKind::LogicalOrEquals)
         }
         // Logical And (&&)
-        else if c == '&' && has_next && (*self).source[(*self).position + 1] == '&' {
-            (*self).read_double(TokenKind::LogicalAnd)
+        else if c == '&' && has_next && self->source[self->position + 1] == '&' {
+            self->read_double(TokenKind::LogicalAnd)
         }
         // Logical Or (||)
-        else if c == '|' && has_next && (*self).source[(*self).position + 1] == '|' {
-            (*self).read_double(TokenKind::LogicalOr)
+        else if c == '|' && has_next && self->source[self->position + 1] == '|' {
+            self->read_double(TokenKind::LogicalOr)
         } else {
             // Table of single char tokens (matched after longer sequences are checked for)
             let single_tokens: [(char, TokenKind); 23] = [
@@ -326,7 +329,7 @@ fn Lexer::next(*mut self) -> Token {
                 let s = single_tokens[i];
 
                 if c == s.v0 {
-                    return (*self).read_single(s.v1);
+                    return self->read_single(s.v1);
                 }
 
                 i = i + 1;
@@ -334,7 +337,7 @@ fn Lexer::next(*mut self) -> Token {
 
             Token {
                 kind: TokenKind::Error,
-                span: Span::new((*self).position, (*self).position + 1),
+                span: Span::new(self->position, self->position + 1),
             }
         };
 
@@ -345,46 +348,61 @@ fn Lexer::next(*mut self) -> Token {
 
     Token {
         kind: TokenKind::Eof,
-        span: Span::new((*self).position, (*self).position),
+        span: Span::new(self->position, self->position),
     }
 }
 
 fn Lexer::ignore_whitespace(*mut self) {
-    // TODO
+    let mut peek_idx = self->position;
+    while peek_idx < self->source.len {
+        let c = self->source[peek_idx];
 
-    (*self).position = (*self).position + 1;
+        if !is_whitespace(c) {
+            break;
+        }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
 
+        self->position = self->position + 1;
+
+        peek_idx = peek_idx + 1;
+    }
 }
 
 fn Lexer::ignore_line(*mut self) {
-    // TODO
-    (*self).position = (*self).position + 1;
+    let mut peek_idx = self->position;
+    while peek_idx < self->source.len {
+        let c = self->source[peek_idx];
 
+        self->position = self->position + 1;
+        peek_idx = peek_idx + 1;
+
+        if c == '\n' {
+            break;
+        }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
+    }
 }
 
 fn Lexer::consume_char(*mut self) {
     // TODO: check utf-8 length
-    (*self).position = (*self).position + 1;
+    self->position = self->position + 1;
 }
 
 fn Lexer::read_number(*mut self) -> Token {
-    let start_position = (*self).position;
-
+    let start_position = self->position;
 
     let mut peek_idx = start_position;
-    while peek_idx < (*self).source.len {
-        let c = (*self).source[peek_idx];
+    while peek_idx < self->source.len {
+        let c = self->source[peek_idx];
 
         if !is_digit(c) {
             break;
         }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
 
-        (*self).position = (*self).position + 1;
+        self->position = self->position + 1;
 
         peek_idx = peek_idx + 1;
     }
 
-    let span = Span::new(start_position, (*self).position);
+    let span = Span::new(start_position, self->position);
 
     Token {
         kind: TokenKind::IntegerLiteral,
@@ -393,18 +411,11 @@ fn Lexer::read_number(*mut self) -> Token {
 }
 
 fn Lexer::read_word(*mut self) -> Token {
-    let start_position = (*self).position;
-
-     // print("[Lexer::read_word] self = {}\n", self);
-     // print("[Lexer::read_word] start_position  = {}\n", start_position);
-     // print("[Lexer::read_word] (*self).source.len  = {}\n", (*self).source.len);
+    let start_position = self->position;
 
     let mut peek_idx = start_position;
-    while peek_idx < (*self).source.len {
-        let c = (*self).source[peek_idx];
-
-        //  print("[Lexer::read_word] c = {}\n", c as u32);
-        //  print("[Lexer::read_word] is_alphanumeric(c) = {}\n", is_alphanumeric(c) as u8 as u32);
+    while peek_idx < self->source.len {
+        let c = self->source[peek_idx];
 
 
         if !is_alphanumeric(c) && c != '_' {
@@ -412,17 +423,11 @@ fn Lexer::read_word(*mut self) -> Token {
             break;
         }; // FIXME: we shouldnt need this semicolon here (parser thinks this is a function call)
 
-       // print("consuming\n");
-
-        // (*self).consume_char();
-        (*self).position = (*self).position + 1;
-
+        self->position = self->position + 1;
         peek_idx = peek_idx + 1;
     }
 
-    let span = Span::new(start_position, (*self).position);
-
-    //    print("read {} chars\n", (*self).position);
+    let span = Span::new(start_position, self->position);
 
     // TODO: parse keywords and boolean literals
 
@@ -433,34 +438,33 @@ fn Lexer::read_word(*mut self) -> Token {
 }
 
 fn Lexer::read_single(*mut self, kind: TokenKind) -> Token {
-    let start = (*self).position;
-    (*self).position = (*self).position + 1;
+    let start = self->position;
+    self->position = self->position + 1;
 
     Token {
         kind: kind,
-        span: Span::new(start, (*self).position),
+        span: Span::new(start, self->position),
     }
 }
 
 fn Lexer::read_double(*mut self, kind: TokenKind) -> Token {
-    let start = (*self).position;
-    (*self).position = (*self).position + 2;
+    let start = self->position;
+    self->position = self->position + 2;
 
     Token {
         kind: kind,
-        span: Span::new(start, (*self).position),
+        span: Span::new(start, self->position),
     }
 }
 
 fn Lexer::read_triple(*mut self, kind: TokenKind) -> Token {
-    // TODO
-
-    (*self).position = (*self).position + 3;
+    let start = self->position;
+    self->position = self->position + 3;
 
 
     Token {
-        kind: TokenKind::Eof,
-        span: Span::new(0, 0),
+        kind: kind,
+        span: Span::new(start, self->position),
     }
 }
 
@@ -479,12 +483,10 @@ fn is_alphabetic(c: char) -> bool {
 }
 
 fn is_alphanumeric(c: char) -> bool {
-    // print("is_alphanumeric\n");
     is_alphabetic(c) || is_digit(c)
 }
 
 fn token_kind_to_string(kind: TokenKind) -> str {
-
     if kind == TokenKind::Keyword {
         "keyword"
     } else if kind == TokenKind::Identifier {
@@ -529,9 +531,77 @@ fn token_kind_to_string(kind: TokenKind) -> str {
         "double_colon"
     } else if kind == TokenKind::Arrow {
         "arrow"
+    } else if kind == TokenKind::Bang {
+        "bang"
+    } else if kind == TokenKind::Tilde {
+        "tilde"
+    } else if kind == TokenKind::Asterisk {
+        "asterisk"
+    } else if kind == TokenKind::Minus {
+        "minus"
+    } else if kind == TokenKind::Ampersand {
+        "ampersand"
+    } else if kind == TokenKind::Plus {
+        "plus"
+    } else if kind == TokenKind::Divide {
+        "divide"
+    } else if kind == TokenKind::Modulus {
+        "modulus"
+    } else if kind == TokenKind::LogicalAnd {
+        "logical_and"
+    } else if kind == TokenKind::LogicalOr {
+        "logical_or"
+    } else if kind == TokenKind::BitwiseXor {
+        "bitwise_xor"
+    } else if kind == TokenKind::BitwiseOr {
+        "bitwise_or"
+    } else if kind == TokenKind::ShiftLeft {
+        "shift_left"
+    } else if kind == TokenKind::ShiftRight {
+        "shift_right"
+    } else if kind == TokenKind::DoubleEquals {
+        "double_equals"
+    } else if kind == TokenKind::NotEquals {
+        "not_equals"
+    } else if kind == TokenKind::LessThan {
+        "less_than"
+    } else if kind == TokenKind::LessThanOrEqualTo {
+        "less_than_or_equal_to"
+    } else if kind == TokenKind::GreaterThan {
+        "greater_than"
+    } else if kind == TokenKind::GreaterThanOrEqualTo {
+        "greater_than_or_equal_to"
+    } else if kind == TokenKind::Equals {
+        "equals"
+    } else if kind == TokenKind::PlusEquals {
+        "plus_equals"
+    } else if kind == TokenKind::MinusEquals {
+        "minus_equals"
+    } else if kind == TokenKind::MultiplyEquals {
+        "multiply_equals"
+    } else if kind == TokenKind::DivideEquals {
+        "divide_equals"
+    } else if kind == TokenKind::ModulusEquals {
+        "modulus_equals"
+    } else if kind == TokenKind::LogicalAndEquals {
+        "logical_and_equals"
+    } else if kind == TokenKind::LogicalOrEquals {
+        "logical_or_equals"
+    } else if kind == TokenKind::BitwiseXorEquals {
+        "bitwise_xor_equals"
+    } else if kind == TokenKind::BitwiseAndEquals {
+        "bitwise_and_equals"
+    } else if kind == TokenKind::BitwiseOrEquals {
+        "bitwise_or_equals"
+    } else if kind == TokenKind::ShiftLeftEquals {
+        "shift_left_equals"
+    } else if kind == TokenKind::ShiftRightEquals {
+        "shift_right_equals"
+    } else if kind == TokenKind::Error {
+        "<error>"
     } else if kind == TokenKind::Eof {
         "<eof>"
     } else {
-        "other"
+        "<unknown>"
     }
 }

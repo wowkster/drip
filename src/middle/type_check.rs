@@ -386,8 +386,12 @@ impl<'hir> TypeContext<'hir> {
                 TypeUsage::LogicalOperation => {
                     format!("cannot use type {provided} in a logical context")
                 }
-                    TypeUsage::FieldAccess => {
-                    format!("{provided} does not support field access")
+                TypeUsage::FieldAccess => {
+                    if provided.is_pointer_like() {
+                        format!("pointer type {provided} does not support direct field access. use a dereference first like '->'")
+                    } else {
+                        format!("{provided} does not support field access")
+                    }
                 }
                 TypeUsage::FunctionCall => {
                     format!("cannot use type {provided} as the target of a function call")
@@ -1731,9 +1735,34 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             hir::ExpressionKind::FieldAccess {
                 target,
                 name,
+                dereference,
                 is_method_call,
             } => {
-                let target_ty = self.get_type(target.hir_id);
+                let mut target_ty = self.get_type(target.hir_id);
+
+                // if dereferencing, the target type MUST be a pointer.
+                if *dereference {
+                    if let TypeKind::Pointer(inner_ty) = &*target_ty {
+                        target_ty = inner_ty.clone();
+                    } else {
+                        let err = self.type_context.get_error_type();
+                        self.insert_type(expression.hir_id, err);
+
+                        self.errors.push(TypeError {
+                            origin: TypeConstraintOrigin {
+                                span: target.span,
+                                kind: TypeBoundary::FieldAccess,
+                                #[cfg(feature = "error-backtrace")]
+                                backtrace: Location::caller(),
+                            },
+                            kind: TypeErrorKind::InvalidOperation {
+                                attempted_usage: TypeUsage::Deref,
+                                provided: target_ty,
+                            },
+                        });
+                        return;
+                    }
+                }
 
                 match &*target_ty {
                     TypeKind::Str => match (name.symbol.value(), *is_method_call) {
@@ -1770,86 +1799,86 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                             });
                         }
                     },
-                    TypeKind::Pointer(inner_ty) => {
-                        if !is_method_call {
-                            self.type_context.report_bug(
-                                expression.span,
-                                "todo: pointer auto deref for field access",
-                            );
-                        }
+                    // TypeKind::Pointer(inner_ty) => {
+                    //     if !is_method_call {
+                    //         self.type_context.report_bug(
+                    //             expression.span,
+                    //             "todo: pointer auto deref for field access",
+                    //         );
+                    //     }
 
-                        let TypeKind::Struct { def_id, .. } = &**inner_ty else {
-                            self.type_context.report_bug(
-                                expression.span,
-                                "todo: pointer auto deref for non-struct method calls",
-                            );
-                        };
+                    //     let TypeKind::Struct { def_id, .. } = &**inner_ty else {
+                    //         self.type_context.report_bug(
+                    //             expression.span,
+                    //             "todo: pointer auto deref for non-struct method calls",
+                    //         );
+                    //     };
 
-                        // TODO: refactor into common "lower_method_call" for
-                        // Struct and Pointer types
-                        let Some(resolution) = self
-                            .type_context
-                            .module
-                            .get_owners()
-                            .filter_map(|owner_id| {
-                                self.type_context
-                                    .module
-                                    .get_owner(owner_id).unwrap()
-                                    .node()
-                                    .as_item()
-                            })
-                            .find_map(|item| {
-                                let hir::ItemKind::Function {
-                                    name: fn_name,
-                                    signature,
-                                    ..
-                                } = &item.kind
-                                else {
-                                    return None;
-                                };
+                    //     // TODO: refactor into common "lower_method_call" for
+                    //     // Struct and Pointer types
+                    //     let Some(resolution) = self
+                    //         .type_context
+                    //         .module
+                    //         .get_owners()
+                    //         .filter_map(|owner_id| {
+                    //             self.type_context
+                    //                 .module
+                    //                 .get_owner(owner_id).unwrap()
+                    //                 .node()
+                    //                 .as_item()
+                    //         })
+                    //         .find_map(|item| {
+                    //             let hir::ItemKind::Function {
+                    //                 name: fn_name,
+                    //                 signature,
+                    //                 ..
+                    //             } = &item.kind
+                    //             else {
+                    //                 return None;
+                    //             };
 
-                                if !(matches!(fn_name.segments[0].resolution, hir::Resolution::Definition(_, id) if id == *def_id)
-                                    && fn_name.segments[1].identifier.symbol == name.symbol)
-                                {
-                                    return None;
-                                }
+                    //             if !(matches!(fn_name.segments[0].resolution, hir::Resolution::Definition(_, id) if id == *def_id)
+                    //                 && fn_name.segments[1].identifier.symbol == name.symbol)
+                    //             {
+                    //                 return None;
+                    //             }
 
-                                if signature.self_parameter.is_none() {
-                                    // TODO: add a help diagnostic here
-                                    // since it exists but its just not a
-                                    // method
-                                    return None;
-                                }
+                    //             if signature.self_parameter.is_none() {
+                    //                 // TODO: add a help diagnostic here
+                    //                 // since it exists but its just not a
+                    //                 // method
+                    //                 return None;
+                    //             }
 
-                                Some(*fn_name.resolution())
-                            })
-                        else {
-                            let err = self.type_context.get_error_type();
-                            self.insert_type(expression.hir_id, err);
+                    //             Some(*fn_name.resolution())
+                    //         })
+                    //     else {
+                    //         let err = self.type_context.get_error_type();
+                    //         self.insert_type(expression.hir_id, err);
 
-                            self.errors.push(TypeError {
-                                origin: TypeConstraintOrigin {
-                                    span: name.span,
-                                    kind: TypeBoundary::FieldAccess,
-                                    #[cfg(feature = "error-backtrace")]
-                                    backtrace: Location::caller(),
-                                },
-                                kind: TypeErrorKind::UnknownMethodCall {
-                                    target: target_ty.clone(),
-                                    name: name.symbol,
-                                },
-                            });
-                            return;
-                        };
+                    //         self.errors.push(TypeError {
+                    //             origin: TypeConstraintOrigin {
+                    //                 span: name.span,
+                    //                 kind: TypeBoundary::FieldAccess,
+                    //                 #[cfg(feature = "error-backtrace")]
+                    //                 backtrace: Location::caller(),
+                    //             },
+                    //             kind: TypeErrorKind::UnknownMethodCall {
+                    //                 target: target_ty.clone(),
+                    //                 name: name.symbol,
+                    //             },
+                    //         });
+                    //         return;
+                    //     };
 
-                        let ty = self.type_context.compute_hir_resolution_type(resolution);
+                    //     let ty = self.type_context.compute_hir_resolution_type(resolution);
 
-                        self.method_resolution_map.insert(
-                            expression.hir_id.local_id,
-                            resolution.as_function_definition().unwrap(),
-                        );
-                        self.insert_type(expression.hir_id, ty);
-                    }
+                    //     self.method_resolution_map.insert(
+                    //         expression.hir_id.local_id,
+                    //         resolution.as_function_definition().unwrap(),
+                    //     );
+                    //     self.insert_type(expression.hir_id, ty);
+                    // }
                     TypeKind::Slice(inner_ty) => match (name.symbol.value(), *is_method_call) {
                         ("ptr", false) => {
                             let ty = self
@@ -2015,6 +2044,8 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     }
                     TypeKind::Error => todo!(),
                     _ => {
+                        // FIXME: this gives bad error messages for unknown methods
+
                         // All other types do not support field access
                         let err = self.type_context.get_error_type();
                         self.insert_type(expression.hir_id, err);
@@ -2668,6 +2699,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                     hir::ExpressionKind::FieldAccess {
                         target,
                         name,
+                        dereference,
                         is_method_call,
                     } => {
                         // FIXME: check if value can be mutated

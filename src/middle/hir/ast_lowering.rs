@@ -11,7 +11,7 @@ use crate::{
     frontend::{ast, lexer::Span},
     index::{Index, IndexVec},
     middle::{
-        hir::{self, HirId, visit::Visitor},
+        hir::{self, visit::Visitor},
         primitive::UIntKind,
         resolve::{Namespace, ResolutionMap, Resolver},
     },
@@ -592,10 +592,12 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             ast::ExpressionKind::FieldAccess {
                 target,
                 name,
+                dereference,
                 is_method_call,
             } => hir::ExpressionKind::FieldAccess {
                 target: self.lower_expression(target),
                 name: self.lower_ident(name),
+                dereference: *dereference,
                 is_method_call: *is_method_call,
             },
             ast::ExpressionKind::FunctionCall { target, arguments } => {

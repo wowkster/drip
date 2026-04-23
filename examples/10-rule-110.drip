@@ -68,42 +68,42 @@ fn Int32Vec::from_slice(ptr: *[i32; 15], len: usize) -> Int32Vec {
 }
 
 fn Int32Vec::get(*self, index: usize) -> i32 {
-    if index > (*self).len - 1 {
-        print("[Int32Vec::get] Index {} is out of bounds for len {}", index, (*self).len);
+    if index > self->len - 1 {
+        print("[Int32Vec::get] Index {} is out of bounds for len {}", index, self->len);
         exit(1);
     }
 
-    *((*self).ptr + (index * 4))
+    *(self->ptr + (index * 4))
 }
 
 fn Int32Vec::push(*mut self, value: i32) {
     // regrow to 2x cap
-    if (*self).len == (*self).capacity {
-        (*self).capacity = if (*self).capacity == 0 {
+    if self->len == self->capacity {
+        self->capacity = if self->capacity == 0 {
             8
         } else {
-            (*self).capacity * 2
+            self->capacity * 2
         };
 
-        let new_ptr = malloc((*self).capacity * 4) as *i32;
+        let new_ptr = malloc(self->capacity * 4) as *i32;
 
         if new_ptr == 0 as *i32 {
             print("[Int32Vec::push] Failed to allocate memory\n");
             exit(1);
         }
 
-        memcpy(new_ptr as *any, (*self).ptr as *any, (*self).len * 4);
+        memcpy(new_ptr as *any, self->ptr as *any, self->len * 4);
 
-        free((*self).ptr as *any);
-        (*self).ptr = new_ptr;
+        free(self->ptr as *any);
+        self->ptr = new_ptr;
     }
 
-    *((*self).ptr + (*self).len * 4) = value;
-    (*self).len = (*self).len + 1;
+    *(self->ptr + self->len * 4) = value;
+    self->len = self->len + 1;
 }
 
 fn Int32Vec::clear(*mut self) {
-    (*self).len = 0;
+    self->len = 0;
 }
 
 /// Applies Rule 110 to a given neighborhood.

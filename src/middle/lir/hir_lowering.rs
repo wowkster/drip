@@ -1545,6 +1545,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
             hir::ExpressionKind::FieldAccess {
                 target,
                 name,
+                dereference,
                 is_method_call,
             } => {
                 // target should evaluate to a location in memory where we can
@@ -1569,10 +1570,15 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                 // optionally loading the value from memory if we are in a value
                 // context
 
-                let target_ty = self.type_map.get_type(target.hir_id);
+                let mut target_ty = self.type_map.get_type(target.hir_id);
+
+                if let ty::TypeKind::Pointer(inner_ty) = &*target_ty {
+                    assert!(*dereference);
+
+                    target_ty = inner_ty.clone();
+                }
 
                 let (structure_ty, field_index, field_ty) = match &*target_ty {
-                    ty::TypeKind::Pointer(_) => todo!("auto deref"),
                     ty::TypeKind::Str | ty::TypeKind::Slice(_) => {
                         let structure_ty = lir::Struct::slice();
 
@@ -1627,6 +1633,12 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     }
                     _ => unreachable!(),
                 };
+
+                // let struct_ptr = if *dereference {
+                //     lir::Operand::Register(self.emit_load_mem(target_value, lir::Type::Pointer))
+                // } else {
+                //     target_value
+                // };
 
                 let field_ptr_reg =
                     self.emit_get_struct_elem_ptr(target_value, structure_ty, field_index);
@@ -2069,9 +2081,12 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                     }
                     hir::ExpressionKind::FieldAccess {
                         target: self_target,
+                        name: _,
+                        dereference,
                         is_method_call: true,
-                        ..
                     } => {
+                        // assert!(!*dereference);
+
                         let method_def_id = self.type_map.function_results[&self.owner_id]
                             .method_resolutions[&target.hir_id.local_id];
 
