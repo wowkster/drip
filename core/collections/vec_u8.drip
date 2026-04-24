@@ -12,7 +12,7 @@ pub fn VecU8::new() -> VecU8 {
     }
 }
 
-pub fn VecU8::get(*self, index: usize) -> i32 {
+pub fn VecU8::get(*self, index: usize) -> u8 {
     if index > self->len - 1 {
         print("[VecU8::get] Index {} is out of bounds for len {}\n", index, self->len);
         exit(1);
@@ -21,7 +21,7 @@ pub fn VecU8::get(*self, index: usize) -> i32 {
     *(self->ptr + index)
 }
 
-pub fn VecU8::push(*mut self, value: i32) {
+pub fn VecU8::push(*mut self, value: u8) {
     // regrow to 2x cap
     if self->len == self->capacity {
        self.regrow(max(self.capacity * 2, 8))
@@ -48,9 +48,9 @@ pub fn VecU8::clear(*mut self) {
 fn VecU8::regrow(*mut self, new_capacity: usize) {
     self->capacity = new_capacity;
     
-    let new_ptr = malloc(self->capacity) as *i32;
+    let new_ptr = malloc(self->capacity) as *u8;
     
-    if new_ptr == 0 as *i32 {
+    if new_ptr == 0 as *u8 {
         print("[VecU8::regrow] Failed to allocate memory\n");
         exit(1);
     }
