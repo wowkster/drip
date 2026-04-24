@@ -1,10 +1,9 @@
-    // TODO: read from file
-    // let source_file = read_to_vec(argv[1]);
-
-
 fn main(argv: [cstr]) {
+    // let source_file = "fn main() -> i32 { 67 }";
 
-    let source_file = "fn main() -> i32 { 67 }";
+    let contents = core::fs::read_to_vec(argv[1]);
+    let source_file = str(contents.ptr, contents.len);
+
     let lexer = Lexer::new(source_file);
 
     print("tokenizing source file: '{}'\n", source_file);
