@@ -1,7 +1,36 @@
+//! parsing of crate roots (core and bin) may happen in parallel
+//!
+//! as source files are parsed, additional mod directives can queue more
+//! files to be parsed. all files get inserted into a module tree
+//!
+//! once all files are parsed, we start at the root of the dependency graph
+//! (core) and run the definition collector on the entire crate, collecting
+//! all of the definitions
+//!
+//! once all of the definitions are collected, we can for each module resolve
+//! all of the imports from other modules in the same crate and combine them
+//! with the definitions in just that module to create the global namespace
+//! for the late resolver
+//!
+//! for each type definition in the module, resolve all of the field types
+//! based on global namespace.
+//!
+//! for each body in the module, resolve all of the types, functions, local
+//! variables, to DefIds
+//!
+//! once all modules are resolved, all of the ast lowering can happen in
+//! parallel
+//!
+//! type checking needs some special care. all of the environment indexing
+//! needs to run first (can happen in parallel), and then all of the type
+//! checking, hir lowering, optimization, and codegen can then happen in
+//! parallel
+
 #![feature(decl_macro)]
 #![feature(backtrace_frames)]
 
 use std::{
+    collections::VecDeque,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
@@ -33,6 +62,11 @@ pub struct Args {
     emit: Option<EmitFormat>,
     #[arg(short = 'O', value_enum, default_value_t = Default::default())]
     optimization_level: OptimizationLevel,
+
+    /// Specifies the path to the directory which holds the core library's
+    /// source code.
+    #[arg(short = 'c')]
+    core_path: Option<PathBuf>,
 
     #[arg(short = 'o')]
     output_path: Option<PathBuf>,
@@ -96,6 +130,10 @@ fn main() {
                 .exit()
         }
     }
+
+    let core_path = args.core_path.unwrap_or_else(|| PathBuf::from("./core"));
+
+    let mut parsing_queue = VecDeque::from([core_path]);
 
     /* Read in source files */
 
