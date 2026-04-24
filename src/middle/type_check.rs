@@ -1792,9 +1792,16 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                     #[cfg(feature = "error-backtrace")]
                                     backtrace: Location::caller(),
                                 },
-                                kind: TypeErrorKind::UnknownFieldAccess {
-                                    target: target_ty,
-                                    name: name.symbol,
+                                kind: if *is_method_call {
+                                    TypeErrorKind::UnknownMethodCall {
+                                        target: target_ty,
+                                        name: name.symbol,
+                                    }
+                                } else {
+                                    TypeErrorKind::UnknownFieldAccess {
+                                        target: target_ty,
+                                        name: name.symbol,
+                                    }
                                 },
                             });
                         }
