@@ -1,23 +1,43 @@
-use std::path::PathBuf;
+use std::{io, path::PathBuf, rc::Rc};
 
 use colored::{Color, Colorize};
 use lexer::{Lexer, TokenKind};
 
 use self::lexer::Span;
-use crate::frontend::lexer::Keyword;
+use crate::{frontend::lexer::Keyword, index::simple_index};
 
 pub mod ast;
 pub mod intern;
 pub mod lexer;
 pub mod parser;
 
-#[derive(Debug)]
+simple_index! {
+    pub struct SourceFileId;
+}
+
+#[derive(Debug, Clone)]
 pub struct SourceFile {
-    pub contents: String,
+    pub contents: Box<str>,
     pub origin: SourceFileOrigin,
 }
 
 impl SourceFile {
+    pub fn read_from_path(path: impl AsRef<std::path::Path>) -> Result<Self, io::Error> {
+        let contents = std::fs::read_to_string(&path)?;
+
+        Ok(Self {
+            contents: contents.into(),
+            origin: SourceFileOrigin::File(path.as_ref().into()),
+        })
+    }
+
+    pub fn as_path(&self) -> &PathBuf {
+        match &self.origin {
+            SourceFileOrigin::File(path) => path,
+            _ => panic!("source file is not a file: {:?}", self.origin),
+        }
+    }
+
     pub fn value_of_span(&self, span: Span) -> &str {
         if span == Span::INVALID {
             unreachable!("tried to get value invalid span");
@@ -92,7 +112,7 @@ impl SourceFile {
             eprint!("{}", format!("{:>3}: ", n + start_idx + 1).white());
 
             let source = Self {
-                contents: line.to_string(),
+                contents: line.to_string().into(),
                 origin: self.origin.clone(),
             };
 

@@ -1,12 +1,21 @@
 use crate::index::simple_index;
 
 simple_index! {
+    /// Represents one of the top level crates being compiled
+    pub struct CrateNum;
+}
+
+/// Globally unique identifier for a particular item definition.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub struct DefId {
+    krate: CrateNum,
+    index: LocalDefId,
+}
+
+simple_index! {
     /// Represents a top level item that owns some amount of child nodes. This
-    /// ID is tied to the module in which the item is defined (not globally
+    /// ID is tied to the crate in which the item is defined (not globally
     /// unique).
-    ///
-    /// NOTE: we dont currently implement modules so this is actually globally
-    /// unique as of right now
     pub struct LocalDefId;
 }
 
@@ -24,7 +33,7 @@ impl ItemLocalId {
     pub const INVALID: Self = Self(u32::MAX);
 }
 
-/// Identifies a node in the HIR for a module. Composed of the ID of the
+/// Identifies a node in the HIR for a crate. Composed of the ID of the
 /// enclosing owner and the local ID of the node within the owner.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct HirId {

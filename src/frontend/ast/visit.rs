@@ -100,7 +100,7 @@ pub trait Visitor<'ast>: Sized {
     }
 }
 
-pub fn walk_module<'a>(visitor: &mut impl Visitor<'a>, module: &'a Module<'a>) {
+pub fn walk_module<'a>(visitor: &mut impl Visitor<'a>, module: &'a Module) {
     for item in &module.items {
         visitor.visit_item(item);
     }
@@ -123,6 +123,7 @@ pub fn walk_item<'a>(visitor: &mut impl Visitor<'a>, item: &'a Item) {
         ItemKind::Static(static_) => {
             visitor.visit_static(static_);
         }
+        ItemKind::Module(module_declaration) => todo!(),
     }
 }
 

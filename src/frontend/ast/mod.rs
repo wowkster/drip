@@ -1,16 +1,55 @@
-use std::num::NonZeroUsize;
+use core::num::NonZeroUsize;
+use std::{collections::BTreeMap, rc::Rc};
 
-use super::{SourceFile, intern::InternedSymbol};
-use crate::frontend::lexer::Span;
+use super::intern::InternedSymbol;
+use crate::{
+    frontend::{SourceFileId, lexer::Span},
+    index::{IndexVec, simple_index},
+};
 
 pub mod visit;
 
 #[derive(Debug)]
-pub struct Module<'source> {
-    pub source_file: &'source SourceFile,
+pub struct Crate {
+    /// The name of the crate (i.e. "core")
+    pub name: Rc<str>,
+
+    /// ASTs of all of the module files within the crate
+    pub modules: IndexVec<ModuleId, Module>,
+}
+
+simple_index! {
+    /// An ID representing a module within the crate's module tree. It's an
+    /// index into a flat list constructed during crate parsing.
+    pub struct ModuleId;
+}
+
+impl ModuleId {
+    /// Root module within the crate
+    pub const CRATE_ROOT: Self = Self(0);
+}
+
+/// The AST representation for a single source file. Each module gets its own
+/// global scope for name resolution, but it shares the ID space for [`NodeId`]s
+/// and [`LocalDefId`]s with the read of the crate
+#[derive(Debug)]
+pub struct Module {
+    pub id: ModuleId,
+    /// Index into the global source map
+    pub source_file: SourceFileId,
     /// Top level items in the module (nested items are in the tree and not in
     /// this list)
-    pub items: Vec<Item>,
+    pub items: Box<[Item]>,
+    /// Submodules declared in this module
+    pub children: BTreeMap<Rc<str>, ModuleId>,
+}
+
+#[derive(Debug)]
+pub struct ModuleContents {
+    pub source_file: SourceFileId,
+    /// Top level items in the module (nested items are in the tree and not in
+    /// this list)
+    pub items: Box<[Item]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,6 +69,7 @@ pub enum ItemKind {
     EnumDefinition(Box<EnumDefinition>),
     TypeAlias(Box<TypeAlias>),
     Static(Box<Static>),
+    Module(Box<ModuleDeclaration>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -132,6 +172,14 @@ pub struct Static {
     pub ty: Box<Type>,
     /// must be a constant or simplify to a constant
     pub initializer: Box<Expression>,
+}
+
+#[derive(Debug)]
+pub struct ModuleDeclaration {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: Identifier,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug)]

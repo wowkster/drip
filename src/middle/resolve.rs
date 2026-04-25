@@ -13,21 +13,24 @@ use crate::{
         lexer::Span,
     },
     index::Index,
+    session::Session,
 };
 
-/// AST Module name resolver
+/// AST name resolver
 ///
-/// Traverses the AST for a module and creates a map from type and value names
+/// Traverses the AST for a crate and creates a map from type and value names
 /// to their definitions within the source code.
 #[derive(Debug)]
-pub struct Resolver {
+pub struct Resolver<'session> {
+    session: &'session Session,
+
     /// A list of built-in function names which we allow resolutions for
     builtin_primitives: BTreeMap<InternedSymbol, PrimitiveKind>,
 
     /// A list of built-in function names which we allow resolutions for
     builtin_functions: BTreeSet<InternedSymbol>,
 
-    // Used to keep track of the definitions that exist within the current
+    // Used to keep track of the definitions that exist within the current crate
     next_def_id: hir::LocalDefId,
     // Maps the IDs of AST owners to the def IDs we've assign to them
     node_to_def_id_map: BTreeMap<NodeId, hir::LocalDefId>,
@@ -60,9 +63,10 @@ pub struct ResolutionMap {
     pub type_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
 }
 
-impl<'ast> Resolver {
-    pub fn new() -> Self {
+impl<'session, 'ast> Resolver<'session> {
+    pub fn new(session: &'session Session) -> Self {
         Self {
+            session,
             builtin_primitives: BTreeMap::from_iter(
                 PrimitiveKind::ALL
                     .iter()
@@ -106,12 +110,16 @@ impl<'ast> Resolver {
         /* Step 2 */
 
         // Collect names of definitions
-        let mut def_collector = DefinitionCollector::new(self, module);
-        visit::walk_module(&mut def_collector, module);
+        {
+            let mut def_collector = DefinitionCollector::new(self, module);
+            visit::walk_module(&mut def_collector, module);
+        }
 
         // Resolve name references
-        let mut late_resolver = LateResolveVisitor::new(self, module);
-        visit::walk_module(&mut late_resolver, module);
+        {
+            let mut late_resolver = LateResolveVisitor::new(self, module);
+            visit::walk_module(&mut late_resolver, module);
+        }
 
         // TODO: warn about unused imports
     }
@@ -141,7 +149,7 @@ impl<'ast> Resolver {
         self.next_def_id.increment_by(1);
 
         self.node_to_def_id_map.insert(node_id, def_id);
-        
+
         match kind {
             // value ns
             hir::DefinitionKind::Function
@@ -176,44 +184,63 @@ impl<'ast> Resolver {
     }
 }
 
-struct DefinitionCollector<'res, 'ast> {
-    resolver: &'res mut Resolver,
-    module: &'ast ast::Module<'ast>,
+struct DefinitionCollector<'session, 'res, 'ast> {
+    resolver: &'res mut Resolver<'session>,
+    module: &'ast ast::Module,
 }
 
-impl<'res, 'ast> DefinitionCollector<'res, 'ast> {
-    fn new(resolver: &'res mut Resolver, module: &'ast ast::Module<'ast>) -> Self {
+impl<'session, 'res, 'ast> DefinitionCollector<'session, 'res, 'ast>
+where
+    'session: 'res,
+{
+    fn new(resolver: &'res mut Resolver<'session>, module: &'ast ast::Module) -> Self {
         Self { resolver, module }
     }
 
     fn report_duplicate_definition(&self, offending_span: Span) -> ! {
+        let source_file = self
+            .resolver
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         eprintln!(
             "{}: duplicate definition for global identifier `{}` (at {})",
             "error".red(),
-            self.module.source_file.value_of_span(offending_span),
-            self.module.source_file.format_span_position(offending_span)
+            source_file.value_of_span(offending_span),
+            source_file.format_span_position(offending_span)
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
+
         // TODO: show where the original was defined
         // TODO: recover from this error and keep moving
+
         std::process::exit(1);
     }
 
     fn report_illegal_function_name(&self, offending_span: Span) -> ! {
+        let source_file = self
+            .resolver
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         eprintln!(
             "{}: function name `{}` is malformed at {}",
             "error".red(),
-            self.module.source_file.value_of_span(offending_span),
-            self.module.source_file.format_span_position(offending_span)
+            source_file.value_of_span(offending_span),
+            source_file.format_span_position(offending_span)
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
+
         // TODO: show where the original was defined
         // TODO: recover from this error and keep moving
+
         std::process::exit(1);
     }
 }
 
-impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
+impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res, 'ast> {
     fn visit_item(&mut self, item: &'ast ast::Item) {
         match &item.kind {
             ast::ItemKind::FunctionDefinition(function) => {
@@ -340,6 +367,7 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
                     hir::DefinitionKind::Static,
                 );
             }
+            ast::ItemKind::Module(module_declaration) => todo!(),
         }
 
         visit::walk_item(self, item);
@@ -348,20 +376,23 @@ impl<'res, 'ast> Visitor<'ast> for DefinitionCollector<'res, 'ast> {
 
 /// Visits all the AST nodes after macros have been expanded to resolve
 /// references to types and values
-pub struct LateResolveVisitor<'res, 'ast> {
-    resolver: &'res mut Resolver,
-    module: &'ast ast::Module<'ast>,
+pub struct LateResolveVisitor<'session, 'res, 'ast> {
+    resolver: &'res mut Resolver<'session>,
+    module: &'ast ast::Module,
 
     // Used to keep track of the lexical context
     value_scope_stack: ScopeStack<hir::Resolution<NodeId>>,
     type_scope_stack: ScopeStack<hir::Resolution<NodeId>>,
 }
 
-impl<'res, 'ast> LateResolveVisitor<'res, 'ast> {
-    pub fn new(resolver: &'res mut Resolver, module: &'ast ast::Module<'ast>) -> Self {
+impl<'session, 'res, 'ast> LateResolveVisitor<'session, 'res, 'ast>
+where
+    'session: 'res,
+{
+    pub fn new(resolver: &'res mut Resolver<'session>, module: &'ast ast::Module) -> Self {
         Self {
-            resolver,
             module,
+            resolver,
             value_scope_stack: ScopeStack::new(),
             type_scope_stack: ScopeStack::new(),
         }
@@ -395,31 +426,43 @@ impl<'res, 'ast> LateResolveVisitor<'res, 'ast> {
     }
 
     fn report_duplicate_binding(&self, offending_span: Span) -> ! {
+        let source_file = self
+            .resolver
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         eprintln!(
             "{}: duplicate definition for identifier `{}` (at {})",
             "error".red(),
-            self.module.source_file.value_of_span(offending_span),
-            self.module.source_file.format_span_position(offending_span)
+            source_file.value_of_span(offending_span),
+            source_file.format_span_position(offending_span)
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
+
         // TODO: show where the original binding was defined
         // TODO: recover from this error and keep moving
+
         std::process::exit(1);
     }
 
     fn report_unresolved(&self, offending_span: Span) -> ! {
+        let source_file = self
+            .resolver
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         eprintln!(
             "{}: unresolved name for identifier `{}` {}",
             "error".red(),
-            self.module.source_file.value_of_span(offending_span),
-            format!(
-                "(at {})",
-                self.module.source_file.format_span_position(offending_span)
-            )
-            .white()
+            source_file.value_of_span(offending_span),
+            format!("(at {})", source_file.format_span_position(offending_span)).white()
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
+
         // TODO: recover from this error and keep moving
+
         std::process::exit(1);
     }
 }
@@ -430,7 +473,7 @@ pub enum Namespace {
     Type,
 }
 
-impl<'res, 'ast> Visitor<'ast> for LateResolveVisitor<'res, 'ast> {
+impl<'session, 'res, 'ast> Visitor<'ast> for LateResolveVisitor<'session, 'res, 'ast> {
     /// Walk the function with a fresh scope to bind parameters in
     fn visit_function_definition(&mut self, function: &'ast FunctionDefinition) {
         assert!(self.value_scope_stack.inner.is_empty());

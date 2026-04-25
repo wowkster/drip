@@ -94,6 +94,7 @@
 
 pub mod hir;
 pub mod lir;
+pub mod module_tree;
 pub mod optimization;
 pub mod primitive;
 pub mod resolve;

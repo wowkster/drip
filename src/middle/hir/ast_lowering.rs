@@ -15,11 +15,14 @@ use crate::{
         primitive::UIntKind,
         resolve::{Namespace, ResolutionMap, Resolver},
     },
+    session::Session,
 };
 
 pub struct ItemLoweringContext<'a, 'ast> {
+    session: &'a Session,
+
     // Global refs
-    module: &'ast ast::Module<'ast>,
+    module: &'ast ast::Module,
     resolver: &'a ResolutionMap,
 
     // Context specific to this owner
@@ -36,12 +39,14 @@ pub struct ItemLoweringContext<'a, 'ast> {
 
 impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
     fn new(
-        module: &'ast ast::Module<'ast>,
+        session: &'a Session,
+        module: &'ast ast::Module,
         resolver: &'a ResolutionMap,
         owner_id: hir::LocalDefId,
         definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
     ) -> Self {
         Self {
+            session,
             module,
             resolver,
             owner_id,
@@ -163,6 +168,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     initializer,
                 }
             }
+            ast::ItemKind::Module(module_declaration) => todo!(),
         };
 
         Rc::new(hir::Item {
@@ -755,17 +761,27 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
     }
 
     fn report_error(&self, offending_span: Span, message: &str) -> ! {
+        let source_file = self
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         eprintln!(
             "{} (at {})",
             message,
-            self.module.source_file.format_span_position(offending_span)
+            source_file.format_span_position(offending_span)
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
         std::process::exit(1);
     }
 
     #[track_caller]
     fn report_bug(&self, offending_span: Span, message: &str) -> ! {
+        let source_file = self
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
         #[cfg(feature = "error-backtrace")]
         eprintln!("{} {}", "error backtrace:".cyan(), Location::caller());
 
@@ -773,15 +789,16 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             "{} {} (at {})",
             "[==BUG==]".bold().red(),
             message,
-            self.module.source_file.format_span_position(offending_span),
+            source_file.format_span_position(offending_span),
         );
-        self.module.source_file.highlight_span(offending_span);
+        source_file.highlight_span(offending_span);
         std::process::exit(1);
     }
 }
 
 struct ItemLowerer<'a, 'ast> {
-    module: &'ast ast::Module<'ast>,
+    session: &'a Session,
+    module: &'ast ast::Module,
     ast_index: &'a IndexVec<hir::LocalDefId, AstOwner<'ast>>,
     resolver: &'a ResolutionMap,
     definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
@@ -796,6 +813,7 @@ impl<'a, 'ast> ItemLowerer<'a, 'ast> {
         f: impl FnOnce(&mut ItemLoweringContext<'_, 'ast>) -> hir::OwnerNode,
     ) {
         let mut lctx = ItemLoweringContext::new(
+            self.session,
             self.module,
             self.resolver,
             local_def_id,
@@ -832,18 +850,19 @@ impl<'a, 'ast> ItemLowerer<'a, 'ast> {
     }
 }
 
-pub fn lower_to_hir<'ast>(module: &'ast ast::Module<'ast>) -> hir::Module {
-    let mut resolver = Resolver::new();
+pub fn lower_to_hir<'ast>(session: &Session, module: &'ast ast::Module) -> hir::Module {
+    let mut resolver = Resolver::new(session);
     resolver.resolve_module(module);
-    let resolver = resolver.into_outputs();
+    let resolution_map = resolver.into_outputs();
 
-    let index = index_ast(&resolver.node_to_def_id_map, module);
+    let index = index_ast(&resolution_map.node_to_def_id_map, module);
     let mut definitions = BTreeMap::new();
 
     let mut lowerer = ItemLowerer {
+        session,
         module,
         ast_index: &index,
-        resolver: &resolver,
+        resolver: &resolution_map,
         definitions: &mut definitions,
     };
 

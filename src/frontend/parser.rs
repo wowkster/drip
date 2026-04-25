@@ -1,52 +1,229 @@
-use std::panic::Location;
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    panic::Location,
+    path::Path,
+    rc::Rc,
+};
 
 use super::{
     ast::{AssignmentOperator, Item, ItemKind, NodeId},
     intern::InternedSymbol,
 };
-use crate::frontend::{
-    SourceFile,
-    ast::{
-        ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
-        EnumDefinition, EnumVariant, Expression, ExpressionKind, FunctionCallArgumentList,
-        FunctionDefinition, FunctionParameter, FunctionParameterList, FunctionSignature,
-        Identifier, Literal, LiteralKind, Local, LocalKind, Module, QualifiedIdentifier,
-        SelfParameter, Statement, StatementKind, Static, StructDefinition, StructField,
-        StructInitializerField, Type, TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind,
-        Visibility,
+use crate::{
+    frontend::{
+        SourceFile, SourceFileId,
+        ast::{
+            ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
+            Crate, EnumDefinition, EnumVariant, Expression, ExpressionKind,
+            FunctionCallArgumentList, FunctionDefinition, FunctionParameter, FunctionParameterList,
+            FunctionSignature, Identifier, Literal, LiteralKind, Local, LocalKind, Module,
+            ModuleDeclaration, ModuleId, QualifiedIdentifier, SelfParameter, Statement,
+            StatementKind, Static, StructDefinition, StructField, StructInitializerField, Type,
+            TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind, Visibility,
+        },
+        lexer::{Keyword, Lexer, Span, Token, TokenKind},
     },
-    lexer::{Keyword, Lexer, Span, Token, TokenKind},
+    index::IndexVec,
+    session::Session,
 };
 
+/// Parses a crate starting from a given source file and resolving all of the
+/// nested submodules based on module declarations in the source code
+pub fn parse_crate(session: &mut Session, name: &str, root: impl AsRef<Path>) -> Crate {
+    struct ParsingQueueEntry {
+        /// Represents the path of the source file within the module tree (i.e.
+        /// `["core", "fs"]`)
+        qualifier: Box<[Rc<str>]>,
+        /// Holds the source code to be parsed
+        source_file: SourceFileId,
+    }
+
+    let root_source_file = session
+        .insert_source_file(SourceFile::read_from_path(root).expect("failed to create core file"));
+
+    let mut parsing_queue = VecDeque::from([ParsingQueueEntry {
+        qualifier: Box::new([]),
+        source_file: root_source_file,
+    }]);
+
+    let mut parsing_ctx = ParsingCtx::new();
+
+    let mut krate = Crate {
+        name: name.into(),
+        modules: IndexVec::new(),
+    };
+
+    while let Some(queued) = parsing_queue.pop_front() {
+        let source_file = session.get_source_file(queued.source_file).unwrap().clone();
+        let module_items = parsing_ctx.parse_items(&source_file);
+
+        let mut submodule_names = BTreeSet::new();
+
+        // add more files to the queue
+        for item in &module_items {
+            let Item {
+                kind: ItemKind::Module(module),
+                ..
+            } = item
+            else {
+                continue;
+            };
+
+            if !submodule_names.insert(module.name.symbol) {
+                // FIXME: better error reporting for this
+                panic!(
+                    "duplicate module declaration with name `{}`",
+                    module.name.symbol.value()
+                )
+            }
+
+            let parent_directory = source_file
+                .as_path()
+                .parent()
+                .expect("source file path missing parent");
+
+            // first look for a file with the same name in the same directory
+            let mut submodule_path = parent_directory
+                .join(module.name.symbol.value())
+                .with_added_extension("drip");
+
+            if !submodule_path.exists() {
+                // if no file is found, look for a subdirectory with the same name
+                submodule_path = parent_directory
+                    .join(module.name.symbol.value())
+                    .join("mod")
+                    .with_added_extension("drip");
+
+                if !submodule_path.exists() {
+                    continue;
+                }
+            }
+
+            let mut submodule_qualifier = queued.qualifier.to_vec();
+            submodule_qualifier.push(module.name.symbol.value().into());
+
+            let next_source_file = session.insert_source_file(
+                SourceFile::read_from_path(&submodule_path).unwrap_or_else(|e| {
+                    panic!(
+                        "failed to read module file `{}`: {}",
+                        submodule_path.display(),
+                        e
+                    )
+                }),
+            );
+
+            parsing_queue.push_back(ParsingQueueEntry {
+                qualifier: submodule_qualifier.into_boxed_slice(),
+                source_file: next_source_file,
+            });
+        }
+
+        krate.insert(&queued.qualifier, queued.source_file, module_items);
+    }
+
+    krate
+}
+
+impl Crate {
+    fn insert(
+        &mut self,
+        qualified_name: &[Rc<str>],
+        source_file: SourceFileId,
+        items: Box<[Item]>,
+    ) -> ModuleId {
+        let id = self.modules.next_index();
+
+        if self.modules.is_empty() {
+            assert!(qualified_name.is_empty());
+        } else {
+            assert!(!qualified_name.is_empty());
+
+            // traverse the tree to find the parent module and insert into there
+
+            let name = &qualified_name[qualified_name.len() - 1];
+            let mut parent_qualifier = &qualified_name[..qualified_name.len() - 1];
+
+            let mut current_id = ModuleId::CRATE_ROOT;
+
+            while !parent_qualifier.is_empty() {
+                let current_node = &self.modules[current_id];
+
+                let Some(next) = current_node.children.get(&parent_qualifier[0]) else {
+                    panic!("parent node does not exist in the tree");
+                };
+
+                current_id = *next;
+                parent_qualifier = &parent_qualifier[1..];
+            }
+
+            let parent_node = &mut self.modules[current_id];
+
+            assert!(
+                !parent_node.children.contains_key(name),
+                "parent already contains key `{name}`"
+            );
+
+            parent_node.children.insert(name.clone(), id);
+        }
+
+        self.modules.push(Module {
+            id,
+            source_file,
+            items,
+            children: BTreeMap::new(),
+        })
+    }
+}
+
+/// Shared state valid for the lifetime of the parsing of an entire crate
 #[derive(Debug)]
-pub struct Parser<'source> {
-    lexer: Lexer<'source>,
+pub struct ParsingCtx {
     next_node_id: u32,
 }
 
-impl<'source> Parser<'source> {
-    pub fn parse_module(source_file: &'source SourceFile) -> Module<'source> {
-        let mut parser = Self {
-            lexer: Lexer::new(source_file),
-            next_node_id: 0,
-        };
-
-        let mut module = Module {
-            source_file,
-            items: Vec::new(),
-        };
-
-        while !parser.lexer.is_eof() && parser.lexer.peek().is_some() {
-            module.items.push(parser.parse_module_item());
-        }
-
-        module
+impl ParsingCtx {
+    pub fn new() -> Self {
+        Self { next_node_id: 0 }
     }
 
     fn create_node_id(&mut self) -> NodeId {
         let id = NodeId(self.next_node_id);
         self.next_node_id += 1;
         id
+    }
+
+    /// Given a source file, creates and invokes a ModuleParser on it to extract
+    /// all of the top level items
+    pub fn parse_items(&mut self, source_file: &SourceFile) -> Box<[Item]> {
+        let mut module_parser = ModuleParser {
+            ctx: self,
+            lexer: Lexer::new(source_file),
+        };
+
+        let mut items = Vec::new();
+
+        while !module_parser.lexer.is_eof() && module_parser.lexer.peek().is_some() {
+            items.push(module_parser.parse_item());
+        }
+
+        items.into_boxed_slice()
+    }
+}
+
+/// Parser for an individual module file
+#[derive(Debug)]
+struct ModuleParser<'ctx, 'source> {
+    /// Reference to the crate parsing context (state stored in between the
+    /// parsing of single module files)
+    ctx: &'ctx mut ParsingCtx,
+    /// Tokenizer for the current source file
+    lexer: Lexer<'source>,
+}
+
+impl<'ctx, 'source> ModuleParser<'ctx, 'source> {
+    #[inline]
+    fn create_node_id(&mut self) -> NodeId {
+        self.ctx.create_node_id()
     }
 
     #[track_caller]
@@ -131,7 +308,7 @@ impl<'source> Parser<'source> {
         self.expect_next_to_be(TokenKind::Keyword(keyword))
     }
 
-    fn parse_module_item(&mut self) -> Item {
+    fn parse_item(&mut self) -> Item {
         let Some(peeked) = self.lexer.peek() else {
             self.report_fatal_error_old("Unexpected EOF while trying to parse module item")
         };
@@ -180,6 +357,15 @@ impl<'source> Parser<'source> {
                     id: self.create_node_id(),
                     span: static_.span,
                     kind: ItemKind::Static(static_),
+                }
+            }
+            TokenKind::Keyword(Keyword::Mod) => {
+                let module_declaration = Box::new(self.parse_module_declaration());
+
+                Item {
+                    id: self.create_node_id(),
+                    span: module_declaration.span,
+                    kind: ItemKind::Module(module_declaration),
                 }
             }
 
@@ -476,6 +662,19 @@ impl<'source> Parser<'source> {
             name,
             ty: Box::new(ty),
             initializer: Box::new(initializer),
+        }
+    }
+
+    fn parse_module_declaration(&mut self) -> ModuleDeclaration {
+        let mod_keyword = self.expect_next_to_be(TokenKind::Keyword(Keyword::Mod));
+        let name = self.parse_identifier();
+        let semicolon = self.expect_next_to_be(TokenKind::Semicolon);
+
+        ModuleDeclaration {
+            id: self.create_node_id(),
+            span: Span::new(mod_keyword.span.start, semicolon.span.end),
+            name,
+            visibility: Visibility::Private,
         }
     }
 

@@ -169,7 +169,8 @@ pub enum Keyword {
     Static,
     #[strum(serialize = "self")]
     This,
-    Enum
+    Enum,
+    Mod,
 }
 
 /// Table of single char tokens (matched after longer sequences are checked for)
@@ -263,7 +264,7 @@ impl<'source> Lexer<'source> {
 
         self.position - pos
     }
-    
+
     #[track_caller]
     fn consume_char(&mut self) -> char {
         let c = self.chars.next().unwrap();
