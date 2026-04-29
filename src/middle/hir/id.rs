@@ -5,11 +5,24 @@ simple_index! {
     pub struct CrateNum;
 }
 
+impl CrateNum {
+    pub const LOCAL_CRATE: Self = Self(0);
+}
+
 /// Globally unique identifier for a particular item definition.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct DefId {
-    krate: CrateNum,
-    index: LocalDefId,
+    pub krate: CrateNum,
+    pub index: LocalDefId,
+}
+
+impl From<LocalDefId> for DefId {
+    fn from(value: LocalDefId) -> Self {
+        DefId {
+            krate: CrateNum::LOCAL_CRATE,
+            index: value,
+        }
+    }
 }
 
 simple_index! {

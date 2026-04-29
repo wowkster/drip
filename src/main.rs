@@ -20,6 +20,8 @@
 //!
 //! once all modules are resolved, all of the ast lowering can happen in
 //! parallel
+//! 
+//! once all of the modules are lowered to hir, the ast can be thrown out
 //!
 //! type checking needs some special care. all of the environment indexing
 //! needs to run first (can happen in parallel), and then all of the type
@@ -49,8 +51,8 @@ use crate::{
     middle::{
         hir::ast_lowering::lower_to_hir,
         lir::{hir_lowering::lower_to_lir, pretty_print::pretty_print_lir},
-        module_tree::CrateModuleTree,
         optimization::pre_ssa::perform_pre_ssa_optimizations,
+        resolve::Resolver,
         type_check::type_check_module,
     },
     session::Session,
@@ -138,25 +140,41 @@ fn main() {
         }
     }
 
-    let core_path = args
-        .core_path
-        .unwrap_or_else(|| PathBuf::from("./core/lib.drip"));
-
     let mut session = Session::new();
 
     // parse modules and load in declared submodules as needed to build the
     // module tree
 
+    let core_path = args
+        .core_path
+        .unwrap_or_else(|| PathBuf::from("./core/lib.drip"));
+
     let krate = parse_crate(&mut session, "core", core_path);
 
-    dbg!(krate);
+    // run name resolution over the entire crate
+
+    let mut resolver = Resolver::new(&session, &krate.modules);
 
     // resolve all of the definitions (DefCollector) in each module and allocate
-    // LocalDefIds for each one
+    // LocalDefIds for each one.
 
-    // for each module resolve all of the imports and add them to the
+    for id in krate.modules.indices() {
+        resolver.collect_definitions(id);
+    }
+
+    // for each module, resolve all of the imports and add them to the
     // definitions collected within that module to create a global value and
     // type scope and then resolve all of the bodies within that module using it
+
+    for id in krate.modules.indices() {
+        resolver.resolve_names(id);
+    }
+
+    // lower the AST to HIR using the output of name resoultion
+
+    let resolution_map = resolver.into_outputs();
+
+    let hir = lower_to_hir(&session, &krate, &resolution_map);
 
     /* Read in source files */
 
@@ -167,7 +185,7 @@ fn main() {
     //     if args.emit == Some(EmitFormat::Ast) {
     //         println!("{ast:#?}");
     //         return;
-    //     }
+    //     }-
 
     //     // Index AST and resolve names to produce HIR
     //     let hir = lower_to_hir(&ast);

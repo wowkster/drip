@@ -10,8 +10,8 @@ use crate::{
     },
     index::{Index, IndexVec},
     middle::{
-        hir::{self, visit::Visitor},
-        lir::{self, RegisterId},
+        hir::{self, CrateNum, visit::Visitor},
+        lir,
         primitive::UIntKind,
         ty,
         type_check::ModuleTypeCheckResults,
@@ -19,7 +19,7 @@ use crate::{
 };
 
 struct BodyLoweringContext<'hir> {
-    module: &'hir hir::Module,
+    krate: &'hir hir::Crate,
     type_map: &'hir ModuleTypeCheckResults,
     owner_id: hir::LocalDefId,
     local_symbol_name: InternedSymbol,
@@ -1009,7 +1009,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
         signature: &hir::FunctionSignature,
         body: hir::BodyId,
     ) {
-        let body = self.module.get_body(body);
+        let body = self.krate.get_body(body);
 
         if let Some(return_ty) = &signature.return_type {
             let return_ty = self.type_map.get_type(return_ty.hir_id);
@@ -1214,14 +1214,20 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         }
                     }
                     hir::Resolution::Definition(hir::DefinitionKind::Static, def_id) => {
+                        assert_eq!(
+                            def_id.krate,
+                            CrateNum::LOCAL_CRATE,
+                            "todo: resolve statics declared in other crates (global symbol including crate name)"
+                        );
+
                         let hir::ItemKind::Static {
                             is_mutable,
                             name,
                             ty,
                             initializer,
                         } = &self
-                            .module
-                            .get_owner(*def_id)
+                            .krate
+                            .get_owner(def_id.index)
                             .unwrap()
                             .node()
                             .as_item()
@@ -1259,14 +1265,22 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         }
                     }
                     hir::Resolution::Definition(hir::DefinitionKind::EnumVariant, def_id) => {
+                        assert_eq!(
+                            def_id.krate,
+                            CrateNum::LOCAL_CRATE,
+                            "todo: resolve enums declared in other crates (global symbol including crate name)"
+                        );
+
                         // FIXME: is this right? if we call a function on an
                         // enum variant is it in the value context? (i think
                         // not)
                         debug_assert_eq!(self.expression_context, ExpressionContext::Value);
 
-                        let enum_def_id = self.module.definitions[def_id].as_non_owner().unwrap();
+                        let enum_def_id = self.krate.definitions[&def_id.index]
+                            .as_non_owner()
+                            .unwrap();
                         let enum_def = self
-                            .module
+                            .krate
                             .get_owner(enum_def_id.owner)
                             .unwrap()
                             .node()
@@ -1277,11 +1291,16 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             unreachable!()
                         };
 
-                        let index = variants.iter().position(|v| v.def_id == *def_id).unwrap();
+                        let index = variants
+                            .iter()
+                            .position(|v| v.def_id == def_id.index)
+                            .unwrap();
 
                         self.expression_to_operand_map.insert(
                             expression.hir_id.local_id,
                             lir::Operand::Immediate(lir::Immediate::Int(
+                                // TODO: allow associating particular values
+                                // with variants instead of using the index
                                 index as _,
                                 // TODO: choose width based on enum size
                                 lir::IntegerWidth::I32,
@@ -1292,11 +1311,17 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         hir::DefinitionKind::Function | hir::DefinitionKind::AssociatedFunction,
                         def_id,
                     ) => {
+                        assert_eq!(
+                            def_id.krate,
+                            CrateNum::LOCAL_CRATE,
+                            "todo: resolve functions declared in other crates (global symbol including crate name)"
+                        );
+
                         let hir::ItemKind::Function {
                             name, signature, ..
                         } = &self
-                            .module
-                            .get_owner(*def_id)
+                            .krate
+                            .get_owner(def_id.index)
                             .unwrap()
                             .node()
                             .as_item()
@@ -1306,7 +1331,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             unreachable!()
                         };
 
-                        let symbol = self.module.global_symbol_for(name);
+                        let symbol = self.krate.global_symbol_for(name);
 
                         self.expression_to_operand_map.insert(
                             expression.hir_id.local_id,
@@ -1670,11 +1695,17 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                 | hir::DefinitionKind::AssociatedFunction,
                                 def_id,
                             ) => {
+                                assert_eq!(
+                                    def_id.krate,
+                                    CrateNum::LOCAL_CRATE,
+                                    "todo: resolve functions declared in other crates (global symbol including crate name)"
+                                );
+
                                 let hir::ItemKind::Function {
                                     name, signature, ..
                                 } = &self
-                                    .module
-                                    .get_owner(*def_id)
+                                    .krate
+                                    .get_owner(def_id.index)
                                     .unwrap()
                                     .node()
                                     .as_item()
@@ -1684,7 +1715,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                                     unreachable!()
                                 };
 
-                                let symbol = self.module.global_symbol_for(name);
+                                let symbol = self.krate.global_symbol_for(name);
                                 let return_ty = signature
                                     .return_type
                                     .as_ref()
@@ -2090,11 +2121,17 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                         let method_def_id = self.type_map.function_results[&self.owner_id]
                             .method_resolutions[&target.hir_id.local_id];
 
+                        assert_eq!(
+                            method_def_id.krate,
+                            hir::CrateNum::LOCAL_CRATE,
+                            "todo: external crates"
+                        );
+
                         let hir::ItemKind::Function {
                             name, signature, ..
                         } = &self
-                            .module
-                            .get_owner(method_def_id)
+                            .krate
+                            .get_owner(method_def_id.index)
                             .unwrap()
                             .node()
                             .as_item()
@@ -2104,7 +2141,7 @@ impl<'hir> hir::visit::Visitor for BodyLoweringContext<'hir> {
                             unreachable!()
                         };
 
-                        let symbol = self.module.global_symbol_for(name);
+                        let symbol = self.krate.global_symbol_for(name);
                         let return_ty = signature
                             .return_type
                             .as_ref()
@@ -2772,7 +2809,7 @@ fn parse_format_string(string: &str) -> Vec<FormatStringItem> {
     parts
 }
 
-pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> lir::Module {
+pub fn lower_to_lir(module: &hir::Crate, type_map: &ModuleTypeCheckResults) -> lir::Module {
     let mut function_definitions = BTreeMap::new();
     let mut static_definitions = BTreeMap::new();
 
@@ -2794,7 +2831,7 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
                 let global_symbol_name = module.global_symbol_for(name);
 
                 let mut ctx = BodyLoweringContext {
-                    module,
+                    krate: module,
                     owner_id,
                     local_symbol_name,
                     global_symbol_name,
@@ -2824,7 +2861,7 @@ pub fn lower_to_lir(module: &hir::Module, type_map: &ModuleTypeCheckResults) -> 
             | hir::ItemKind::TypeAlias { .. } => continue,
             hir::ItemKind::Static { name, ty, .. } => {
                 let mut ctx = BodyLoweringContext {
-                    module,
+                    krate: module,
                     owner_id,
                     local_symbol_name: name.symbol,
                     global_symbol_name: name.symbol,

@@ -13,7 +13,7 @@ use crate::{
     middle::{
         hir::{self, visit::Visitor},
         primitive::UIntKind,
-        resolve::{Namespace, ResolutionMap, Resolver},
+        resolve::{Namespace, ResolutionMap},
     },
     session::Session,
 };
@@ -23,7 +23,7 @@ pub struct ItemLoweringContext<'a, 'ast> {
 
     // Global refs
     module: &'ast ast::Module,
-    resolver: &'a ResolutionMap,
+    resolution_map: &'a ResolutionMap,
 
     // Context specific to this owner
     owner_id: hir::LocalDefId,
@@ -41,14 +41,14 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
     fn new(
         session: &'a Session,
         module: &'ast ast::Module,
-        resolver: &'a ResolutionMap,
+        resolution_map: &'a ResolutionMap,
         owner_id: hir::LocalDefId,
         definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
     ) -> Self {
         Self {
             session,
             module,
-            resolver,
+            resolution_map,
             owner_id,
             next_local_id: hir::ItemLocalId::new(1),
             body: None,
@@ -81,7 +81,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     [identifier] => {
                         let resolution = hir::Resolution::Definition(
                             hir::DefinitionKind::Function,
-                            self.owner_id,
+                            self.owner_id.into(),
                         );
 
                         name_segments.push(Rc::new(hir::PathSegment {
@@ -93,7 +93,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     }
                     [ty_name, method_name] => {
                         let ty_resolution = self
-                            .resolver
+                            .resolution_map
                             .type_name_resolutions
                             .get(&ty_name.id)
                             .expect("method type name had no resolution");
@@ -107,7 +107,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                         let method_resolution = hir::Resolution::Definition(
                             hir::DefinitionKind::Function,
-                            self.owner_id,
+                            self.owner_id.into(),
                         );
 
                         name_segments.push(Rc::new(hir::PathSegment {
@@ -168,7 +168,9 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                     initializer,
                 }
             }
-            ast::ItemKind::Module(module_declaration) => todo!(),
+            ast::ItemKind::Module(_) | ast::ItemKind::Import(_) => {
+                unreachable!("non-owners should not be visited during item lowering")
+            }
         };
 
         Rc::new(hir::Item {
@@ -230,7 +232,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
                 if let [identifier] = qualified_identifier.segments.as_slice() {
                     let resolution = self
-                        .resolver
+                        .resolution_map
                         .type_name_resolutions
                         .get(&identifier.id)
                         .unwrap_or_else(|| {
@@ -357,7 +359,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
         variants
             .iter()
             .map(|v| {
-                let local_def_id = self.resolver.node_to_def_id_map[&v.id];
+                let local_def_id = self.resolution_map.node_to_def_id_map[&v.id];
 
                 let variant = hir::EnumVariant {
                     def_id: local_def_id,
@@ -464,8 +466,8 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
         match qualified_identifier.segments.as_slice() {
             [identifier] => {
                 let map = match namespace {
-                    Namespace::Value => &self.resolver.value_name_resolutions,
-                    Namespace::Type => &self.resolver.type_name_resolutions,
+                    Namespace::Value => &self.resolution_map.value_name_resolutions,
+                    Namespace::Type => &self.resolution_map.type_name_resolutions,
                 };
 
                 let resolution = map
@@ -481,7 +483,7 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
             }
             [ty_name, method_name] => {
                 let ty_resolution = self
-                    .resolver
+                    .resolution_map
                     .type_name_resolutions
                     .get(&ty_name.id)
                     .unwrap_or_else(|| {
@@ -496,8 +498,8 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
                 }));
 
                 let map = match namespace {
-                    Namespace::Value => &self.resolver.value_name_resolutions,
-                    Namespace::Type => &self.resolver.type_name_resolutions,
+                    Namespace::Value => &self.resolution_map.value_name_resolutions,
+                    Namespace::Type => &self.resolution_map.type_name_resolutions,
                 };
 
                 let method_resolution = map.get(&method_name.id).unwrap_or_else(|| {
@@ -798,9 +800,9 @@ impl<'a, 'ast> ItemLoweringContext<'a, 'ast> {
 
 struct ItemLowerer<'a, 'ast> {
     session: &'a Session,
-    module: &'ast ast::Module,
+    krate: &'ast ast::Crate,
     ast_index: &'a IndexVec<hir::LocalDefId, AstOwner<'ast>>,
-    resolver: &'a ResolutionMap,
+    resolution_map: &'a ResolutionMap,
     definitions: &'a mut BTreeMap<hir::LocalDefId, hir::MaybeOwner>,
 }
 
@@ -812,10 +814,24 @@ impl<'a, 'ast> ItemLowerer<'a, 'ast> {
         local_def_id: hir::LocalDefId,
         f: impl FnOnce(&mut ItemLoweringContext<'_, 'ast>) -> hir::OwnerNode,
     ) {
+        let module = self
+            .krate
+            .modules
+            .iter()
+            .find(|module| {
+                module.items.iter().any(|item| {
+                    self.resolution_map
+                        .node_to_def_id_map
+                        .get(&item.id)
+                        .is_some_and(|id| *id == local_def_id)
+                })
+            })
+            .expect("failed to find defining module");
+
         let mut lctx = ItemLoweringContext::new(
             self.session,
-            self.module,
-            self.resolver,
+            module,
+            self.resolution_map,
             local_def_id,
             &mut self.definitions,
         );
@@ -850,42 +866,44 @@ impl<'a, 'ast> ItemLowerer<'a, 'ast> {
     }
 }
 
-pub fn lower_to_hir<'ast>(session: &Session, module: &'ast ast::Module) -> hir::Module {
-    let mut resolver = Resolver::new(session);
-    resolver.resolve_module(module);
-    let resolution_map = resolver.into_outputs();
-
-    let index = index_ast(&resolution_map.node_to_def_id_map, module);
+pub fn lower_to_hir<'ast>(
+    session: &Session,
+    krate: &'ast ast::Crate,
+    resolution_map: &ResolutionMap,
+) -> hir::Crate {
+    let ast_index = index_ast(&resolution_map.node_to_def_id_map, krate);
     let mut definitions = BTreeMap::new();
 
     let mut lowerer = ItemLowerer {
         session,
-        module,
-        ast_index: &index,
-        resolver: &resolution_map,
+        krate,
+        ast_index: &ast_index,
+        resolution_map: &resolution_map,
         definitions: &mut definitions,
     };
 
     // lower nodes one at a time, resolving names and constructing HIR
-    for def_id in index.indices() {
+    for def_id in ast_index.indices() {
         lowerer.lower_node(def_id);
     }
 
-    hir::Module { definitions }
+    hir::Crate { definitions }
 }
 
 /// Pulls out the items from the AST and indexes them based on their assigned
 /// local def ID
 pub fn index_ast<'ast>(
     node_to_def_id_map: &BTreeMap<ast::NodeId, hir::LocalDefId>,
-    module: &'ast ast::Module,
+    krate: &'ast ast::Crate,
 ) -> IndexVec<hir::LocalDefId, AstOwner<'ast>> {
     let mut indexer = AstIndexer {
         node_to_def_id_map,
         index: IndexVec::new(),
     };
 
-    ast::visit::walk_module(&mut indexer, module);
+    for module in krate.modules.iter() {
+        ast::visit::walk_module(&mut indexer, module);
+    }
 
     indexer.index
 }
@@ -902,6 +920,13 @@ pub struct AstIndexer<'a, 'ast> {
 
 impl<'a, 'ast> ast::visit::Visitor<'ast> for AstIndexer<'a, 'ast> {
     fn visit_item(&mut self, item: &'ast ast::Item) {
+        if matches!(
+            item.kind,
+            ast::ItemKind::Module(_) | ast::ItemKind::Import(_)
+        ) {
+            return;
+        }
+
         let def_id = *self.node_to_def_id_map.get(&item.id).unwrap();
 
         *self

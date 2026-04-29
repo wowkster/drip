@@ -1,48 +1,48 @@
-pub fn atof() {
+fn atof() {
     // TODO
 }
 
-pub fn f64::from_str() {
+fn f64::from_str() {
     // TODO
 }
 
-pub fn atoi() {
+fn atoi() {
     // TODO
 }
 
-pub fn i32::from_str() {
+fn i32::from_str() {
     // TODO
 }
 
-pub fn atol() {
+fn atol() {
     // TODO
 }
 
-pub fn i64::from_str() {
+fn i64::from_str() {
     // TODO
 }
 
 // ============ Environment ============
 
-pub fn exit(code: i64) {
-    syscall(60, code)
-}
+// fn exit(code: i64) {
+//     syscall(60, code)
+// }
 
 // ============ Memory Allocation ============
 
-pub fn malloc(size: usize) -> *any {
+fn malloc(size: usize) -> *any {
     // TODO
 }
 
-pub fn free(ptr: *any) {
+fn free(ptr: *any) {
     // TODO
 }
 
-pub fn realloc(ptr: *any, size: usize) -> *any {
+fn realloc(ptr: *any, size: usize) -> *any {
     // TODO
 }
 
-pub fn calloc(num: usize, size: usize) -> *any {
+fn calloc(num: usize, size: usize) -> *any {
     // TODO
 }
 

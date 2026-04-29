@@ -1,9 +1,9 @@
 use std::rc::Rc;
 
 use super::{
-    Block, Body, BodyId, Expression, ExpressionKind, FunctionParameter, FunctionSignature,
-    Identifier, Item, ItemKind, LetStatement, Literal, Module, OwnerNode, Path, PathSegment,
-    Statement, StatementKind, Type, TypeKind,
+    Block, Body, BodyId, Crate, Expression, ExpressionKind, FunctionParameter, FunctionSignature,
+    Identifier, Item, ItemKind, LetStatement, Literal, OwnerNode, Path, PathSegment, Statement,
+    StatementKind, Type, TypeKind,
 };
 use crate::middle::hir::{
     ArrayInitializer, EnumVariant, MaybeOwner, StructField, StructInitializerField,
@@ -111,7 +111,7 @@ pub enum BlockContext {
     Loop,
 }
 
-pub fn walk_module(visitor: &mut impl Visitor, module: &Module) {
+pub fn walk_module(visitor: &mut impl Visitor, module: &Crate) {
     for definition in module.definitions.values() {
         match definition {
             MaybeOwner::Owner(owner) => match owner.node() {

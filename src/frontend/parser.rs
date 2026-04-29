@@ -16,7 +16,7 @@ use crate::{
             ArrayInitializer, AssignmentOperatorKind, BinaryOperator, BinaryOperatorKind, Block,
             Crate, EnumDefinition, EnumVariant, Expression, ExpressionKind,
             FunctionCallArgumentList, FunctionDefinition, FunctionParameter, FunctionParameterList,
-            FunctionSignature, Identifier, Literal, LiteralKind, Local, LocalKind, Module,
+            FunctionSignature, Identifier, Import, Literal, LiteralKind, Local, LocalKind, Module,
             ModuleDeclaration, ModuleId, QualifiedIdentifier, SelfParameter, Statement,
             StatementKind, Static, StructDefinition, StructField, StructInitializerField, Type,
             TypeAlias, TypeKind, UnaryOperator, UnaryOperatorKind, Visibility,
@@ -368,7 +368,15 @@ impl<'ctx, 'source> ModuleParser<'ctx, 'source> {
                     kind: ItemKind::Module(module_declaration),
                 }
             }
+            TokenKind::Keyword(Keyword::Use) => {
+                let import = Box::new(self.parse_import());
 
+                Item {
+                    id: self.create_node_id(),
+                    span: import.span,
+                    kind: ItemKind::Import(import),
+                }
+            }
             _ => self.report_fatal_error(
                 peeked.span,
                 &format!(
@@ -673,6 +681,19 @@ impl<'ctx, 'source> ModuleParser<'ctx, 'source> {
         ModuleDeclaration {
             id: self.create_node_id(),
             span: Span::new(mod_keyword.span.start, semicolon.span.end),
+            name,
+            visibility: Visibility::Private,
+        }
+    }
+
+    fn parse_import(&mut self) -> Import {
+        let use_keyword = self.expect_next_to_be(TokenKind::Keyword(Keyword::Use));
+        let name = self.parse_qualified_identifier();
+        let semicolon = self.expect_next_to_be(TokenKind::Semicolon);
+
+        Import {
+            id: self.create_node_id(),
+            span: Span::new(use_keyword.span.start, semicolon.span.end),
             name,
             visibility: Visibility::Private,
         }

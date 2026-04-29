@@ -171,6 +171,7 @@ pub enum Keyword {
     This,
     Enum,
     Mod,
+    Use,
 }
 
 /// Table of single char tokens (matched after longer sequences are checked for)

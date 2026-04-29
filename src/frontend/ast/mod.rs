@@ -70,6 +70,7 @@ pub enum ItemKind {
     TypeAlias(Box<TypeAlias>),
     Static(Box<Static>),
     Module(Box<ModuleDeclaration>),
+    Import(Box<Import>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -183,6 +184,14 @@ pub struct ModuleDeclaration {
 }
 
 #[derive(Debug)]
+pub struct Import {
+    pub id: NodeId,
+    pub span: Span,
+    pub name: QualifiedIdentifier,
+    pub visibility: Visibility,
+}
+
+#[derive(Debug)]
 pub struct Type {
     pub id: NodeId,
     pub span: Span,
@@ -208,6 +217,12 @@ pub struct QualifiedIdentifier {
 }
 
 impl QualifiedIdentifier {
+    pub fn first(&self) -> &Identifier {
+        self.segments
+            .first()
+            .expect("QualifiedIdentifier should always have at least one segment")
+    }
+
     pub fn last(&self) -> &Identifier {
         self.segments
             .last()

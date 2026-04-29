@@ -1,4 +1,6 @@
- fn read_to_vec(path: cstr) -> VecU8 {
+use crate::collections::vec_u8::VecU8;
+
+fn read_to_vec(path: cstr) -> VecU8 {
     // let fd = open(path, 0, 0);
 
     // let reader = BufRead::new(fd);
@@ -8,6 +10,6 @@
 
     // reader.free();
     // close(fd);
-    
+
     // vec
 }

@@ -24,7 +24,7 @@ pub use id::*;
 use itertools::Itertools;
 
 #[derive(Debug)]
-pub struct Module {
+pub struct Crate {
     /// All the owner definitions within the module including those nested
     /// within other items
     pub definitions: BTreeMap<LocalDefId, MaybeOwner>,
@@ -61,7 +61,7 @@ impl MaybeOwner {
     }
 }
 
-impl Module {
+impl Crate {
     pub fn get_body(&self, id: BodyId) -> Rc<Body> {
         let MaybeOwner::Owner(owner) = &self.definitions[&id.hir_id.owner] else {
             unreachable!();
@@ -630,8 +630,7 @@ pub struct PathSegment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolution<R = ItemLocalId> {
     // Any namespace
-    // TODO: use global ID once we support modules
-    Definition(DefinitionKind, LocalDefId),
+    Definition(DefinitionKind, DefId),
     // Value namespace
     Local(R),
     IntrinsicFunction(InternedSymbol),
@@ -656,16 +655,26 @@ pub enum DefinitionKind {
 }
 
 impl<R> Resolution<R> {
-    pub fn as_function_definition(self) -> Option<LocalDefId> {
+    pub fn as_any_function_definition(self) -> Option<DefId> {
         match self {
-            Resolution::Definition(DefinitionKind::Function, local_def_id) => Some(local_def_id),
+            Resolution::Definition(
+                DefinitionKind::Function | DefinitionKind::AssociatedFunction,
+                def_id,
+            ) => Some(def_id),
             _ => None,
         }
     }
 
-    pub fn as_static_definition(self) -> Option<LocalDefId> {
+    pub fn as_function_definition(self) -> Option<DefId> {
         match self {
-            Resolution::Definition(DefinitionKind::Static, local_def_id) => Some(local_def_id),
+            Resolution::Definition(DefinitionKind::Function, def_id) => Some(def_id),
+            _ => None,
+        }
+    }
+
+    pub fn as_static_definition(self) -> Option<DefId> {
+        match self {
+            Resolution::Definition(DefinitionKind::Static, def_id) => Some(def_id),
             _ => None,
         }
     }

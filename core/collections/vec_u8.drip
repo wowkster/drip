@@ -1,10 +1,14 @@
-pub struct VecU8 {
-    pub ptr: *mut u8,
-    pub len: usize,
-    pub capacity: usize
+use crate::libc::string::memcpy;
+use crate::libc::stdlib::malloc;
+use crate::libc::stdlib::free;
+
+struct VecU8 {
+     ptr: *mut u8,
+     len: usize,
+     capacity: usize
 }
 
-pub fn VecU8::new() -> VecU8 {
+fn VecU8::new() -> VecU8 {
     VecU8 {
         ptr: 0 as *u8,
         len: 0,
@@ -12,7 +16,7 @@ pub fn VecU8::new() -> VecU8 {
     }
 }
 
-pub fn VecU8::get(*self, index: usize) -> u8 {
+fn VecU8::get(*self, index: usize) -> u8 {
     if index > self->len - 1 {
         print("[VecU8::get] Index {} is out of bounds for len {}\n", index, self->len);
         exit(1);
@@ -21,17 +25,17 @@ pub fn VecU8::get(*self, index: usize) -> u8 {
     *(self->ptr + index)
 }
 
-pub fn VecU8::push(*mut self, value: u8) {
+fn VecU8::push(*mut self, value: u8) {
     // regrow to 2x cap
     if self->len == self->capacity {
-       self.regrow(max(self.capacity * 2, 8))
+       self.regrow(usize::max(self.capacity * 2, 8))
     }
 
     *(self->ptr + self->len) = value;
     self->len = self->len + 1;
 }
 
-pub fn VecU8::extend(*mut self, slice: [u8]) {
+fn VecU8::extend(*mut self, slice: [u8]) {
     let mut i = 0;
 
     if self->capacity - self->len < slice.len {
@@ -41,22 +45,30 @@ pub fn VecU8::extend(*mut self, slice: [u8]) {
     memcpy(self->ptr + self->len, slice.ptr, slice.len);
 }
 
-pub fn VecU8::clear(*mut self) {
+fn VecU8::clear(*mut self) {
     self->len = 0;
 }
 
 fn VecU8::regrow(*mut self, new_capacity: usize) {
     self->capacity = new_capacity;
-    
+
     let new_ptr = malloc(self->capacity) as *u8;
-    
+
     if new_ptr == 0 as *u8 {
         print("[VecU8::regrow] Failed to allocate memory\n");
         exit(1);
     }
-    
+
     memcpy(new_ptr as *any, self->ptr as *any, self->len);
-    
+
     free(self->ptr as *any);
     self->ptr = new_ptr;
+}
+
+fn usize::max(a: usize, b: usize) -> usize {
+    if a > b {
+        a
+    } else {
+        b
+    }
 }

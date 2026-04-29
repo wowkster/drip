@@ -86,7 +86,7 @@ pub enum TypeKind {
     /// A user defined type with named fields
     Struct {
         /// Allows structs with the same layout to be distinct types
-        def_id: hir::LocalDefId,
+        def_id: hir::DefId,
         name: InternedSymbol,
         fields: Rc<[StructField]>,
     },
@@ -98,7 +98,7 @@ pub enum TypeKind {
     ///
     /// A user defined discrete set of allowed values
     Enum {
-        def_id: hir::LocalDefId,
+        def_id: hir::DefId,
         name: InternedSymbol,
     },
     /// fn(i32, str, *T) -> u8

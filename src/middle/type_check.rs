@@ -32,10 +32,6 @@ use std::{
 use colored::Colorize;
 use hashbrown::{HashMap, HashSet};
 
-use super::{
-    hir,
-    primitive::{PrimitiveKind, UIntKind},
-};
 use crate::{
     frontend::{
         SourceFile,
@@ -45,8 +41,8 @@ use crate::{
     },
     index::Index,
     middle::{
-        hir::DefinitionKind,
-        primitive::{FloatKind, IntKind},
+        hir,
+        primitive::{FloatKind, IntKind, PrimitiveKind, UIntKind},
         ty::{FloatVariableId, IntVariableId, StructField, Type, TypeKind, TypeVariable},
     },
 };
@@ -54,22 +50,22 @@ use crate::{
 #[derive(Debug)]
 struct TypeContext<'hir> {
     /// Module we are type checking
-    module: &'hir hir::Module,
+    module: &'hir hir::Crate,
     /// Used for error reporting
     source_file: &'hir SourceFile,
     /// Type interning table to prevent duplicate types
     type_table: HashSet<Rc<TypeKind>>,
     /// Stores the computed types of top level items in the module
-    def_id_to_type_map: BTreeMap<hir::LocalDefId, Type>,
+    local_def_id_to_type_map: BTreeMap<hir::LocalDefId, Type>,
 }
 
 impl<'hir> TypeContext<'hir> {
-    fn new(module: &'hir hir::Module, source_file: &'hir SourceFile) -> Self {
+    fn new(module: &'hir hir::Crate, source_file: &'hir SourceFile) -> Self {
         Self {
             module,
             source_file,
             type_table: HashSet::new(),
-            def_id_to_type_map: BTreeMap::new(),
+            local_def_id_to_type_map: BTreeMap::new(),
         }
     }
 
@@ -160,27 +156,39 @@ impl<'hir> TypeContext<'hir> {
 
     fn compute_hir_resolution_type(&mut self, resolution: hir::Resolution) -> Type {
         match resolution {
-            hir::Resolution::Definition(definition_kind, local_def_id) => match definition_kind {
-                DefinitionKind::EnumVariant => {
-                    let hir_id = &self.module.definitions[&local_def_id]
+            hir::Resolution::Definition(definition_kind, def_id) => match definition_kind {
+                hir::DefinitionKind::EnumVariant => {
+                    assert_eq!(
+                        def_id.krate,
+                        hir::CrateNum::LOCAL_CRATE,
+                        "todo: external crates"
+                    );
+
+                    let hir_id = &self.module.definitions[&def_id.index]
                         .as_non_owner()
                         .unwrap();
 
-                    self.def_id_to_type_map[&hir_id.owner].clone()
+                    self.local_def_id_to_type_map[&hir_id.owner].clone()
                 }
-                DefinitionKind::Function
-                | DefinitionKind::Constant
-                | DefinitionKind::Static
-                | DefinitionKind::AssociatedFunction
-                | DefinitionKind::Struct
-                | DefinitionKind::Enum
-                | DefinitionKind::Union
-                | DefinitionKind::Alias => {
-                    let owner = self.module.definitions[&local_def_id].unwrap();
+                hir::DefinitionKind::Function
+                | hir::DefinitionKind::Constant
+                | hir::DefinitionKind::Static
+                | hir::DefinitionKind::AssociatedFunction
+                | hir::DefinitionKind::Struct
+                | hir::DefinitionKind::Enum
+                | hir::DefinitionKind::Union
+                | hir::DefinitionKind::Alias => {
+                    assert_eq!(
+                        def_id.krate,
+                        hir::CrateNum::LOCAL_CRATE,
+                        "todo: external crates"
+                    );
+
+                    let owner = self.module.definitions[&def_id.index].unwrap();
 
                     match owner.node() {
                         hir::OwnerNode::Item(item) => {
-                            self.def_id_to_type_map[&item.owner_id].clone()
+                            self.local_def_id_to_type_map[&item.owner_id].clone()
                         }
                     }
                 }
@@ -270,14 +278,20 @@ impl<'hir> TypeContext<'hir> {
             return None;
         };
 
-        let hir::Resolution::Definition(hir::DefinitionKind::Struct, implementor_id) =
+        let hir::Resolution::Definition(hir::DefinitionKind::Struct, implementor_def_id) =
             &name.segments[0].resolution
         else {
             // FIXME: we hit this if a self type is used in a standalone function
             unreachable!()
         };
 
-        let owned_ty = self.def_id_to_type_map[implementor_id].clone();
+        assert_eq!(
+            implementor_def_id.krate,
+            hir::CrateNum::LOCAL_CRATE,
+            "todo: external crates"
+        );
+
+        let owned_ty = self.local_def_id_to_type_map[&implementor_def_id.index].clone();
 
         let self_ty = match self_parameter {
             hir::SelfParameter::Owned => owned_ty,
@@ -501,7 +515,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
             } => {
                 let ty = self.compute_type_for_function_signature(name, signature);
                 self.type_context
-                    .def_id_to_type_map
+                    .local_def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
             hir::ItemKind::Struct { name, fields } => {
@@ -514,21 +528,21 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
                     .collect();
 
                 let ty = self.type_context.intern_type(TypeKind::Struct {
-                    def_id: item.owner_id,
+                    def_id: item.owner_id.into(),
                     name: name.symbol,
                     fields,
                 });
                 self.type_context
-                    .def_id_to_type_map
+                    .local_def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
             hir::ItemKind::Enum { name, variants, .. } => {
                 let ty = self.type_context.intern_type(TypeKind::Enum {
-                    def_id: item.owner_id,
+                    def_id: item.owner_id.into(),
                     name: name.symbol,
                 });
                 self.type_context
-                    .def_id_to_type_map
+                    .local_def_id_to_type_map
                     .insert(item.owner_id, ty);
 
                 hir::visit::walk_enum_definition(self, name, variants.clone());
@@ -536,7 +550,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
             hir::ItemKind::TypeAlias { ty, name } => {
                 let ty = self.type_context.compute_hir_type(ty.clone());
                 self.type_context
-                    .def_id_to_type_map
+                    .local_def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
             hir::ItemKind::Static {
@@ -547,17 +561,17 @@ impl<'tcx, 'hir> hir::visit::Visitor for GlobalTypeEnvironmentIndexer<'tcx, 'hir
             } => {
                 let ty = self.type_context.compute_hir_type(ty.clone());
                 self.type_context
-                    .def_id_to_type_map
+                    .local_def_id_to_type_map
                     .insert(item.owner_id, ty);
             }
         }
     }
 
     fn visit_enum_variant(&mut self, variant: Rc<hir::EnumVariant>) {
-        let ty = self.type_context.def_id_to_type_map[&variant.hir_id.owner].clone();
+        let ty = self.type_context.local_def_id_to_type_map[&variant.hir_id.owner].clone();
 
         self.type_context
-            .def_id_to_type_map
+            .local_def_id_to_type_map
             .insert(variant.def_id, ty);
     }
 }
@@ -573,7 +587,7 @@ struct TypeChecker<'tcx, 'hir> {
     node_to_type_map: BTreeMap<hir::ItemLocalId, Type>,
     /// Stores the method resolutions we computed for each field access
     /// expression within a function call expression
-    method_resolution_map: BTreeMap<hir::ItemLocalId, hir::LocalDefId>,
+    method_resolution_map: BTreeMap<hir::ItemLocalId, hir::DefId>,
 
     /// A list of accumulated constraints on the existing free type variables
     constraints: Vec<TypeConstraint>,
@@ -1467,7 +1481,7 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
     fn visit_enum_variant(&mut self, variant: Rc<hir::EnumVariant>) {
         hir::visit::walk_enum_variant(self, variant.clone());
 
-        let ty = &self.type_context.def_id_to_type_map[&variant.def_id];
+        let ty = &self.type_context.local_def_id_to_type_map[&variant.def_id];
         self.insert_type(variant.hir_id, ty.clone());
     }
 
@@ -1566,7 +1580,13 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
             }
             hir::ExpressionKind::Path(path) => match path.resolution() {
                 hir::Resolution::Definition(_, def_id) => {
-                    let ty = self.type_context.def_id_to_type_map[def_id].clone();
+                    assert_eq!(
+                        def_id.krate,
+                        hir::CrateNum::LOCAL_CRATE,
+                        "todo: external crates"
+                    );
+
+                    let ty = self.type_context.local_def_id_to_type_map[&def_id.index].clone();
                     self.insert_type(expression.hir_id, ty);
                 }
                 hir::Resolution::Local(local_id) => {
@@ -2662,16 +2682,17 @@ impl<'tcx, 'hir> hir::visit::Visitor for TypeChecker<'tcx, 'hir> {
                                 error = Some(TypeErrorKind::IllegalMutation)
                             }
                         }
-                        hir::Resolution::Definition(DefinitionKind::Static, def_id) => {
-                            let hir::ItemKind::Static {
-                                is_mutable,
-                                name,
-                                ty,
-                                initializer,
-                            } = &self
+                        hir::Resolution::Definition(hir::DefinitionKind::Static, def_id) => {
+                            assert_eq!(
+                                def_id.krate,
+                                hir::CrateNum::LOCAL_CRATE,
+                                "todo: external crates"
+                            );
+
+                            let hir::ItemKind::Static { is_mutable, .. } = &self
                                 .type_context
                                 .module
-                                .get_owner(*def_id)
+                                .get_owner(def_id.index)
                                 .unwrap()
                                 .node()
                                 .as_item()
@@ -3007,11 +3028,11 @@ impl ModuleTypeCheckResults {
 pub struct TypeCheckResults {
     pub owner_id: hir::LocalDefId,
     pub node_types: BTreeMap<hir::ItemLocalId, Type>,
-    pub method_resolutions: BTreeMap<hir::ItemLocalId, hir::LocalDefId>,
+    pub method_resolutions: BTreeMap<hir::ItemLocalId, hir::DefId>,
     pub self_type: Option<Type>,
 }
 
-pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> ModuleTypeCheckResults {
+pub fn type_check_module(module: &hir::Crate, source_file: &SourceFile) -> ModuleTypeCheckResults {
     let mut ctx = TypeContext::new(module, source_file);
 
     // Compute types for top level items we might reference in body contexts
@@ -3071,7 +3092,7 @@ pub fn type_check_module(module: &hir::Module, source_file: &SourceFile) -> Modu
     }
 
     ModuleTypeCheckResults {
-        item_types: ctx.def_id_to_type_map,
+        item_types: ctx.local_def_id_to_type_map,
         function_results,
     }
 }

@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    rc::Rc,
+};
 
 use colored::Colorize;
 
@@ -6,13 +9,13 @@ use super::{hir, primitive::PrimitiveKind};
 use crate::{
     frontend::{
         ast::{
-            self, Block, FunctionDefinition, FunctionParameter, Local, Module, NodeId,
+            self, Block, FunctionDefinition, FunctionParameter, Local, Module, ModuleId, NodeId,
             visit::{self, Visitor},
         },
         intern::InternedSymbol,
         lexer::Span,
     },
-    index::Index,
+    index::{Index, IndexVec},
     session::Session,
 };
 
@@ -21,8 +24,9 @@ use crate::{
 /// Traverses the AST for a crate and creates a map from type and value names
 /// to their definitions within the source code.
 #[derive(Debug)]
-pub struct Resolver<'session> {
-    session: &'session Session,
+pub struct Resolver<'a> {
+    session: &'a Session,
+    module_map: &'a IndexVec<ModuleId, Module>,
 
     /// A list of built-in function names which we allow resolutions for
     builtin_primitives: BTreeMap<InternedSymbol, PrimitiveKind>,
@@ -31,24 +35,40 @@ pub struct Resolver<'session> {
     builtin_functions: BTreeSet<InternedSymbol>,
 
     // Used to keep track of the definitions that exist within the current crate
-    next_def_id: hir::LocalDefId,
+    next_local_def_id: hir::LocalDefId,
     // Maps the IDs of AST owners to the def IDs we've assign to them
-    node_to_def_id_map: BTreeMap<NodeId, hir::LocalDefId>,
+    node_to_local_def_id_map: BTreeMap<NodeId, hir::LocalDefId>,
 
-    // Maps names of definitions in the global scope to their resolutions
-    // TODO: scope these to the modules they are defined in with the module
-    // graph
-    global_value_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
-    global_type_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
-
-    /// Maps methods on types to their definitions
-    global_method_scopes: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
-    /// Maps enum definition ids to lists of their members
-    global_enum_member_scopes: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
+    /// constructed during definition collection
+    local_definition_maps: BTreeMap<ModuleId, LocalDefinitionMap>,
+    /// constructed during early resolution
+    global_scopes: BTreeMap<ModuleId, GlobalScope>,
 
     // Maps name references to definitions
     value_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
     type_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
+}
+
+/// Tracks the value and type definitions within a particular module
+/// (constructed during definition collection)
+#[derive(Debug, Default)]
+struct LocalDefinitionMap {
+    values: BTreeMap<InternedSymbol, (hir::DefinitionKind, hir::LocalDefId)>,
+    types: BTreeMap<InternedSymbol, (hir::DefinitionKind, hir::LocalDefId)>,
+
+    /// Maps methods on type names to their definitions
+    methods: BTreeMap<InternedSymbol, BTreeMap<InternedSymbol, hir::LocalDefId>>,
+    /// Maps enum definition ids to lists of their members
+    enum_members: BTreeMap<hir::LocalDefId, BTreeMap<InternedSymbol, hir::LocalDefId>>,
+}
+
+/// Map of identifiers in the global scope to their resolutions (constructed
+/// during definition collection and import resolution)
+#[derive(Debug, Default)]
+struct GlobalScope {
+    // Maps names of definitions in the global scope to their resolutions
+    value_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
+    type_scope: BTreeMap<InternedSymbol, hir::Resolution<NodeId>>,
 }
 
 /// The result of resolving everything in a module
@@ -63,10 +83,11 @@ pub struct ResolutionMap {
     pub type_name_resolutions: BTreeMap<NodeId, hir::Resolution<NodeId>>,
 }
 
-impl<'session, 'ast> Resolver<'session> {
-    pub fn new(session: &'session Session) -> Self {
+impl<'a> Resolver<'a> {
+    pub fn new(session: &'a Session, module_map: &'a IndexVec<ModuleId, Module>) -> Self {
         Self {
             session,
+            module_map,
             builtin_primitives: BTreeMap::from_iter(
                 PrimitiveKind::ALL
                     .iter()
@@ -80,46 +101,40 @@ impl<'session, 'ast> Resolver<'session> {
                 InternedSymbol::new("open"),
                 InternedSymbol::new("close"),
             ]),
-            next_def_id: hir::LocalDefId::new(0), // TODO: should this be reserved for the module itself?
-            node_to_def_id_map: BTreeMap::new(),
-            global_value_scope: BTreeMap::new(),
-            global_type_scope: BTreeMap::new(),
-            global_method_scopes: BTreeMap::new(),
-            global_enum_member_scopes: BTreeMap::new(),
+            next_local_def_id: hir::LocalDefId::new(0), // TODO: should this be reserved for the module itself?
+            node_to_local_def_id_map: BTreeMap::new(),
+            local_definition_maps: BTreeMap::new(),
+            global_scopes: BTreeMap::new(),
             value_name_resolutions: BTreeMap::new(),
             type_name_resolutions: BTreeMap::new(),
         }
     }
 
-    /// Resolves all names within a module in 2 steps.
-    ///
     /// The first step resolves imports and locates all the definitions of
     /// custom types and functions. These imports and custom types are then
     /// bound in the global value and type scopes
-    ///
+    pub fn collect_definitions(&mut self, module_id: ModuleId) {
+        let module = &self.module_map[module_id];
+        let mut def_collector = DefinitionCollector::new(self, module);
+        visit::walk_module(&mut def_collector, module);
+    }
+
     /// The second step traverses the AST and makes sure any references to types
     /// or values are defined in this module's scope or are imported. It also
     /// keeps track of function parameters and local variables to make sure all
     /// identifiers are valid. Field and method accesses are not checked at this
     /// stage and are resolved during module type checking.
-    pub fn resolve_module(&mut self, module: &'ast Module) {
-        /* Step 1 */
+    pub fn resolve_names(&mut self, module_id: ModuleId) {
+        let module = &self.module_map[module_id];
 
-        // TODO: resolve imports and add to import maps
+        let mut early_resolver = EarlyResolveVisitor::new(self, module);
+        visit::walk_module(&mut early_resolver, module);
 
-        /* Step 2 */
+        // TODO: now that we know which types are in scope, revisit all of the
+        // method definitions to check for any duplicate definitions
 
-        // Collect names of definitions
-        {
-            let mut def_collector = DefinitionCollector::new(self, module);
-            visit::walk_module(&mut def_collector, module);
-        }
-
-        // Resolve name references
-        {
-            let mut late_resolver = LateResolveVisitor::new(self, module);
-            visit::walk_module(&mut late_resolver, module);
-        }
+        let mut late_resolver = LateResolveVisitor::new(self, module);
+        visit::walk_module(&mut late_resolver, module);
 
         // TODO: warn about unused imports
     }
@@ -128,7 +143,7 @@ impl<'session, 'ast> Resolver<'session> {
     /// resolutions and macro expansions in the requested modules
     pub fn into_outputs(self) -> ResolutionMap {
         ResolutionMap {
-            node_to_def_id_map: self.node_to_def_id_map,
+            node_to_def_id_map: self.node_to_local_def_id_map,
             value_name_resolutions: self.value_name_resolutions,
             type_name_resolutions: self.type_name_resolutions,
         }
@@ -138,49 +153,53 @@ impl<'session, 'ast> Resolver<'session> {
     /// appropriate global scope
     pub fn create_definition(
         &mut self,
+        module_id: ModuleId,
         node_id: ast::NodeId,
         ty_name: Option<InternedSymbol>,
+        parent: Option<hir::LocalDefId>,
         name: InternedSymbol,
         kind: hir::DefinitionKind,
     ) -> hir::LocalDefId {
         // TODO: check if this def already exists? may be needed for macro
         // expansion
-        let def_id = self.next_def_id;
-        self.next_def_id.increment_by(1);
+        let local_def_id = self.next_local_def_id;
+        self.next_local_def_id.increment_by(1);
 
-        self.node_to_def_id_map.insert(node_id, def_id);
+        self.node_to_local_def_id_map.insert(node_id, local_def_id);
+
+        let def_map = self.local_definition_maps.entry(module_id).or_default();
 
         match kind {
             // value ns
             hir::DefinitionKind::Function
             | hir::DefinitionKind::Constant
             | hir::DefinitionKind::Static => {
-                self.global_value_scope
-                    .insert(name, hir::Resolution::Definition(kind, def_id));
+                def_map.values.insert(name, (kind, local_def_id.into()));
             }
             hir::DefinitionKind::AssociatedFunction => {
-                self.global_method_scopes
+                def_map
+                    .methods
                     .entry(ty_name.unwrap())
                     .or_default()
-                    .insert(name, def_id);
+                    .insert(name, local_def_id);
             }
             hir::DefinitionKind::EnumVariant => {
-                self.global_enum_member_scopes
-                    .entry(ty_name.unwrap())
+                def_map
+                    .enum_members
+                    .entry(parent.unwrap())
                     .or_default()
-                    .insert(name, def_id);
+                    .insert(name, local_def_id);
             }
             // type ns
             hir::DefinitionKind::Struct
             | hir::DefinitionKind::Enum
             | hir::DefinitionKind::Union
             | hir::DefinitionKind::Alias => {
-                self.global_type_scope
-                    .insert(name, hir::Resolution::Definition(kind, def_id));
+                def_map.types.insert(name, (kind, local_def_id.into()));
             }
         }
 
-        def_id
+        local_def_id
     }
 }
 
@@ -194,7 +213,26 @@ where
     'session: 'res,
 {
     fn new(resolver: &'res mut Resolver<'session>, module: &'ast ast::Module) -> Self {
+        resolver
+            .local_definition_maps
+            .insert(module.id, Default::default());
+
         Self { resolver, module }
+    }
+
+    // fn global_scope_mut(&mut self) -> &GlobalScope {
+    //     self.resolver
+    //         .global_scopes
+    //         .entry(self.module.id)
+    //         .or_default()
+    // }
+    //
+
+    fn local_definition_map(&self) -> &LocalDefinitionMap {
+        self.resolver
+            .local_definition_maps
+            .get(&self.module.id)
+            .unwrap()
     }
 
     fn report_duplicate_definition(&self, offending_span: Span) -> ! {
@@ -247,12 +285,18 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
                 match function.signature.name.segments.as_slice() {
                     // this is a normal function definition
                     [name] => {
-                        if self.resolver.global_value_scope.contains_key(&name.symbol) {
+                        if self
+                            .local_definition_map()
+                            .values
+                            .contains_key(&name.symbol)
+                        {
                             self.report_duplicate_definition(name.span)
                         }
 
-                        let def_id = self.resolver.create_definition(
+                        let local_def_id = self.resolver.create_definition(
+                            self.module.id,
                             item.id,
+                            None,
                             None,
                             name.symbol,
                             hir::DefinitionKind::Function,
@@ -260,14 +304,17 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
 
                         self.resolver.value_name_resolutions.insert(
                             name.id,
-                            hir::Resolution::Definition(hir::DefinitionKind::Function, def_id),
+                            hir::Resolution::Definition(
+                                hir::DefinitionKind::Function,
+                                local_def_id.into(),
+                            ),
                         );
                     }
                     // this is a method definition
                     [ty_name, method_name] => {
                         if self
-                            .resolver
-                            .global_method_scopes
+                            .local_definition_map()
+                            .methods
                             .get(&ty_name.symbol)
                             .is_some_and(|ty_scope| ty_scope.contains_key(&method_name.symbol))
                         {
@@ -275,8 +322,10 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
                         }
 
                         self.resolver.create_definition(
+                            self.module.id,
                             item.id,
                             Some(ty_name.symbol),
+                            None,
                             method_name.symbol,
                             hir::DefinitionKind::AssociatedFunction,
                         );
@@ -286,15 +335,17 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
             }
             ast::ItemKind::StructDefinition(struct_definition) => {
                 if self
-                    .resolver
-                    .global_type_scope
+                    .local_definition_map()
+                    .types
                     .contains_key(&struct_definition.name.symbol)
                 {
                     self.report_duplicate_definition(struct_definition.name.span)
                 }
 
                 self.resolver.create_definition(
+                    self.module.id,
                     item.id,
+                    None,
                     None,
                     struct_definition.name.symbol,
                     hir::DefinitionKind::Struct,
@@ -302,15 +353,17 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
             }
             ast::ItemKind::EnumDefinition(enum_definition) => {
                 if self
-                    .resolver
-                    .global_type_scope
+                    .local_definition_map()
+                    .types
                     .contains_key(&enum_definition.name.symbol)
                 {
                     self.report_duplicate_definition(enum_definition.name.span)
                 }
 
-                self.resolver.create_definition(
+                let parent = self.resolver.create_definition(
+                    self.module.id,
                     item.id,
+                    None,
                     None,
                     enum_definition.name.symbol,
                     hir::DefinitionKind::Enum,
@@ -318,9 +371,9 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
 
                 for variant in &enum_definition.variants {
                     if self
-                        .resolver
-                        .global_enum_member_scopes
-                        .get(&enum_definition.name.symbol)
+                        .local_definition_map()
+                        .enum_members
+                        .get(&parent)
                         .is_some_and(|ty_scope| ty_scope.contains_key(&variant.name.symbol))
                     {
                         // TODO: nicer error for duplicate enum members
@@ -328,8 +381,10 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
                     }
 
                     self.resolver.create_definition(
+                        self.module.id,
                         variant.id,
-                        Some(enum_definition.name.symbol),
+                        None,
+                        Some(parent),
                         variant.name.symbol,
                         hir::DefinitionKind::EnumVariant,
                     );
@@ -337,15 +392,17 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
             }
             ast::ItemKind::TypeAlias(type_alias) => {
                 if self
-                    .resolver
-                    .global_type_scope
+                    .local_definition_map()
+                    .types
                     .contains_key(&type_alias.name.symbol)
                 {
                     self.report_duplicate_definition(type_alias.name.span)
                 }
 
                 self.resolver.create_definition(
+                    self.module.id,
                     item.id,
+                    None,
                     None,
                     type_alias.name.symbol,
                     hir::DefinitionKind::Alias,
@@ -353,29 +410,175 @@ impl<'session, 'res, 'ast> Visitor<'ast> for DefinitionCollector<'session, 'res,
             }
             ast::ItemKind::Static(static_) => {
                 if self
-                    .resolver
-                    .global_value_scope
+                    .local_definition_map()
+                    .values
                     .contains_key(&static_.name.symbol)
                 {
                     self.report_duplicate_definition(static_.name.span)
                 }
 
                 self.resolver.create_definition(
+                    self.module.id,
                     item.id,
+                    None,
                     None,
                     static_.name.symbol,
                     hir::DefinitionKind::Static,
                 );
             }
-            ast::ItemKind::Module(module_declaration) => todo!(),
+            ast::ItemKind::Module(_) | ast::ItemKind::Import(_) => {}
         }
 
         visit::walk_item(self, item);
     }
 }
 
-/// Visits all the AST nodes after macros have been expanded to resolve
-/// references to types and values
+/// Visits all the AST nodes after definitions have been collected to resolve
+/// imports to their DefIds and populate the global scope with a map from names
+/// to type and value definitions
+pub struct EarlyResolveVisitor<'session, 'res, 'ast> {
+    resolver: &'res mut Resolver<'session>,
+    module: &'ast ast::Module,
+}
+
+impl<'session, 'res, 'ast> EarlyResolveVisitor<'session, 'res, 'ast>
+where
+    'session: 'res,
+{
+    pub fn new(resolver: &'res mut Resolver<'session>, module: &'ast ast::Module) -> Self {
+        let scope = resolver.global_scopes.entry(module.id).or_default();
+
+        for (name, (def_kind, local_def_id)) in &resolver.local_definition_maps[&module.id].types {
+            scope.type_scope.insert(
+                *name,
+                hir::Resolution::Definition(*def_kind, (*local_def_id).into()),
+            );
+        }
+
+        for (name, (def_kind, local_def_id)) in &resolver.local_definition_maps[&module.id].values {
+            scope.value_scope.insert(
+                *name,
+                hir::Resolution::Definition(*def_kind, (*local_def_id).into()),
+            );
+        }
+
+        Self { module, resolver }
+    }
+
+    fn global_scope_mut(&mut self) -> &mut GlobalScope {
+        self.resolver
+            .global_scopes
+            .get_mut(&self.module.id)
+            .unwrap()
+    }
+
+    pub fn lookup_crate_module_from_absolute_path(
+        &self,
+        path: &[InternedSymbol],
+    ) -> Option<ModuleId> {
+        assert!(!path.is_empty());
+
+        let mut qualifier = &path[..];
+        let mut current_id = ModuleId::CRATE_ROOT;
+
+        while !qualifier.is_empty() {
+            let current_node = &self.resolver.module_map[current_id];
+
+            let name: Rc<str> = qualifier[0].value().into();
+
+            let next = current_node.children.get(&name)?;
+
+            current_id = *next;
+            qualifier = &qualifier[1..];
+        }
+
+        Some(current_id)
+    }
+
+    fn report_unresolved(&self, offending_span: Span) -> ! {
+        let source_file = self
+            .resolver
+            .session
+            .get_source_file(self.module.source_file)
+            .unwrap();
+
+        eprintln!(
+            "{}: failed to resolve import `{}` {}",
+            "error".red(),
+            source_file.value_of_span(offending_span),
+            format!("(at {})", source_file.format_span_position(offending_span)).white()
+        );
+        source_file.highlight_span(offending_span);
+
+        // TODO: recover from this error and keep moving
+
+        std::process::exit(1);
+    }
+}
+
+impl<'session, 'res, 'ast> Visitor<'ast> for EarlyResolveVisitor<'session, 'res, 'ast> {
+    fn visit_import(&mut self, import: &'ast ast::Import) {
+        if import.name.first().symbol == InternedSymbol::new("crate") {
+            // lookup the module in the crate
+
+            let segments = &import.name.segments[1..]
+                .iter()
+                .map(|i| i.symbol)
+                .collect::<Vec<_>>();
+
+            let Some((name, module_path)) = segments.split_last() else {
+                self.report_unresolved(import.name.span)
+            };
+
+            let Some(module) = self.lookup_crate_module_from_absolute_path(module_path) else {
+                // FIXME: create a better error message for this (resolve
+                // intermediate module paths to see where it cuts off)
+                self.report_unresolved(import.name.span)
+            };
+
+            // lookup the definition in the module using the module id
+
+            let mut resolved = false;
+
+            let type_res = self.resolver.local_definition_maps[&module]
+                .types
+                .get(name)
+                .cloned();
+
+            if let Some((kind, local_def_id)) = type_res {
+                self.global_scope_mut().type_scope.insert(
+                    *name,
+                    hir::Resolution::Definition(kind, local_def_id.into()),
+                );
+                resolved = true;
+            }
+
+            let value_res = self.resolver.local_definition_maps[&module]
+                .values
+                .get(name)
+                .cloned();
+
+            if let Some((kind, local_def_id)) = value_res {
+                self.global_scope_mut().value_scope.insert(
+                    *name,
+                    hir::Resolution::Definition(kind, local_def_id.into()),
+                );
+                resolved = true;
+            }
+
+            if !resolved {
+                self.report_unresolved(import.name.span)
+            }
+        } else {
+            todo!("resolve relative and external imports (use session information)")
+        }
+
+        // TODO
+    }
+}
+
+/// Visits all the AST nodes after imports are resolved and all definitions are
+/// collected to resolve references to types and values
 pub struct LateResolveVisitor<'session, 'res, 'ast> {
     resolver: &'res mut Resolver<'session>,
     module: &'ast ast::Module,
@@ -398,6 +601,14 @@ where
         }
     }
 
+    fn local_definition_map(&self) -> &LocalDefinitionMap {
+        &self.resolver.local_definition_maps[&self.module.id]
+    }
+
+    fn global_scope(&self) -> &GlobalScope {
+        &self.resolver.global_scopes[&self.module.id]
+    }
+
     /// Resolves a name within the current lexical scope
     fn resolve_symbol(
         &self,
@@ -415,8 +626,14 @@ where
         }
 
         let (scope_stack, global_scope) = match namespace {
-            Namespace::Value => (&self.value_scope_stack, &self.resolver.global_value_scope),
-            Namespace::Type => (&self.type_scope_stack, &self.resolver.global_type_scope),
+            Namespace::Value => (
+                &self.value_scope_stack,
+                &self.resolver.global_scopes[&self.module.id].value_scope,
+            ),
+            Namespace::Type => (
+                &self.type_scope_stack,
+                &self.resolver.global_scopes[&self.module.id].type_scope,
+            ),
         };
 
         scope_stack
@@ -446,7 +663,22 @@ where
         std::process::exit(1);
     }
 
+    #[track_caller]
     fn report_unresolved(&self, offending_span: Span) -> ! {
+        #[cfg(feature = "error-backtrace")]
+        {
+            eprintln!(
+                "{}: {}",
+                "backtrace".cyan().bold(),
+                std::panic::Location::caller()
+            );
+
+            let bt = std::backtrace::Backtrace::capture();
+            if bt.status() == std::backtrace::BacktraceStatus::Captured {
+                eprintln!("{bt}");
+            }
+        }
+
         let source_file = self
             .resolver
             .session
@@ -489,19 +721,19 @@ impl<'session, 'res, 'ast> Visitor<'ast> for LateResolveVisitor<'session, 'res, 
                     .type_name_resolutions
                     .insert(ty_name.id, ty_resolution);
 
-                let def_id = self
-                    .resolver
-                    .global_method_scopes
+                let local_def_id = *self
+                    .local_definition_map()
+                    .methods
                     .get(&ty_name.symbol)
                     .and_then(|ty_scope| ty_scope.get(&method_name.symbol))
                     .expect("missing def id for method");
 
                 let method_resolution =
-                    hir::Resolution::Definition(hir::DefinitionKind::Function, *def_id);
+                    hir::Resolution::Definition(hir::DefinitionKind::Function, local_def_id.into());
 
                 self.resolver
                     .value_name_resolutions
-                    .insert(ty_name.id, method_resolution);
+                    .insert(method_name.id, method_resolution);
             }
             _ => {}
         }
@@ -569,8 +801,14 @@ impl<'session, 'res, 'ast> Visitor<'ast> for LateResolveVisitor<'session, 'res, 
     fn visit_qualified_identifier(
         &mut self,
         qualified_ident: &'ast ast::QualifiedIdentifier,
-        namespace: Namespace,
+        namespace: Option<Namespace>,
     ) {
+        // we dont care about qpaths in ambiguous places like imports bc those
+        // have already beem resolved
+        let Some(namespace) = namespace else {
+            return;
+        };
+
         match namespace {
             Namespace::Value => {
                 // There are 2 possibilities here:
@@ -609,24 +847,34 @@ impl<'session, 'res, 'ast> Visitor<'ast> for LateResolveVisitor<'session, 'res, 
                     // FIXME: should this be moved into the type checker to handle type aliases?
 
                     let res = if let Some(method_def_id) = self
-                        .resolver
-                        .global_method_scopes
+                        .local_definition_map()
+                        .methods
                         .get(&first_ident.symbol)
                         .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
+                        .copied()
                     {
                         hir::Resolution::Definition(
                             hir::DefinitionKind::AssociatedFunction,
-                            *method_def_id,
+                            method_def_id.into(),
                         )
-                    } else if let Some(variant_def_id) = self
-                        .resolver
-                        .global_enum_member_scopes
-                        .get(&first_ident.symbol)
-                        .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
+                    } else if let hir::Resolution::Definition(hir::DefinitionKind::Enum, def_id) =
+                        first_resolution
+                        && let Some(variant_local_def_id) = self
+                            .local_definition_map()
+                            .enum_members
+                            .get(&def_id.index)
+                            .and_then(|ty_scope| ty_scope.get(&second_ident.symbol))
+                            .copied()
                     {
+                        assert_eq!(
+                            def_id.krate,
+                            hir::CrateNum::LOCAL_CRATE,
+                            "todo: external crates"
+                        );
+
                         hir::Resolution::Definition(
                             hir::DefinitionKind::EnumVariant,
-                            *variant_def_id,
+                            variant_local_def_id.into(),
                         )
                     } else {
                         self.report_unresolved(second_ident.span);

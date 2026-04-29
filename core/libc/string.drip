@@ -1,4 +1,4 @@
-pub fn memcpy(dest: *mut any, src: *mut any, len: usize) {
+fn memcpy(dest: *mut any, src: *mut any, len: usize) {
     let mut i = 0;
 
     // TODO: optimize with SIMD or at least use larger quanta
@@ -9,92 +9,92 @@ pub fn memcpy(dest: *mut any, src: *mut any, len: usize) {
     }
 }
 
-pub fn memmove() {
+fn memmove() {
     // TODO
 }
 
-pub fn strcopy(destination: *mut u8, source: *u8) -> *mut u8 {
+fn strcopy(destination: *mut u8, source: *u8) -> *mut u8 {
     // TODO
 }
 
-pub fn strncopy(destination: *mut u8, source: *u8, num: usize) -> *mut u8 {
+fn strncopy(destination: *mut u8, source: *u8, num: usize) -> *mut u8 {
     // TODO
 }
 
-pub fn strcat() {
+fn strcat() {
     // TODO
 }
 
-pub fn strncat() {
+fn strncat() {
     // TODO
 }
 
-pub fn memcmp() {
+fn memcmp() {
     // TODO
 }
 
 /// Compares two null-terminated strings against each other
-pub fn strcmp(ptr1: *u8, ptr2: *u8) -> i32 {
+fn strcmp(ptr1: *u8, ptr2: *u8) -> i32 {
     // TODO
 }
 
-pub fn strcoll() {
+fn strcoll() {
     // TODO
 }
 
-pub fn strncmp() {
+fn strncmp() {
     // TODO
 }
 
-pub fn strxfrm() {
+fn strxfrm() {
     // TODO
 }
 
-pub fn memchr(buffer: *u8, c: u8, n: usize) {
+fn memchr(buffer: *u8, c: u8, n: usize) {
     // TODO
 }
 
-pub fn strchr() {
+fn strchr() {
     // TODO
 }
 
-pub fn strcspn() {
+fn strcspn() {
     // TODO
 }
 
-pub fn strpbrk() {
+fn strpbrk() {
     // TODO
 }
 
-pub fn strrchr() {
+fn strrchr() {
     // TODO
 }
 
-pub fn strspn() {
+fn strspn() {
     // TODO
 }
 
 /// Finds the finds the first occurance of needle in haystack, returning the
 /// index
-pub fn strstr(haystack: *u8, needle: *u8) -> usize {
+fn strstr(haystack: *u8, needle: *u8) -> usize {
     // TODO
 }
 
-pub fn strtok() {
+fn strtok() {
     // TODO
 }
 
-pub fn memset() {
+fn memset() {
     // TODO
 }
 
-pub fn strerror() {
+fn strerror() {
     // TODO
 }
 
 /// Finds the length of a null-terminated string
-pub fn strlen(ptr: *u8) -> usize {
-    let mut p = p;
+fn strlen(ptr: *u8) -> usize {
+    let mut p = ptr;
     
     while *p != 0 {
         p = p + 1;

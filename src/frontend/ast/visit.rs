@@ -8,13 +8,17 @@ use super::{
 };
 use crate::{
     frontend::ast::{
-        ArrayInitializer, EnumDefinition, EnumVariant, Static, StructDefinition, StructField,
-        StructInitializerField,
+        ArrayInitializer, Crate, EnumDefinition, EnumVariant, Import, ModuleDeclaration, Static,
+        StructDefinition, StructField, StructInitializerField,
     },
     middle::resolve::Namespace,
 };
 
 pub trait Visitor<'ast>: Sized {
+    fn visit_module(&mut self, module: &'ast Module) {
+        walk_module(self, module)
+    }
+
     fn visit_item(&mut self, item: &'ast Item) {
         walk_item(self, item)
     }
@@ -59,6 +63,14 @@ pub trait Visitor<'ast>: Sized {
         walk_static(self, static_)
     }
 
+    fn visit_module_declaration(&mut self, module: &'ast ModuleDeclaration) {
+        walk_module_declaration(self, module);
+    }
+
+    fn visit_import(&mut self, import: &'ast Import) {
+        walk_import(self, import)
+    }
+
     fn visit_identifier(&mut self, _identifier: &'ast Identifier) {}
 
     fn visit_type(&mut self, ty: &'ast Type) {
@@ -68,7 +80,7 @@ pub trait Visitor<'ast>: Sized {
     fn visit_qualified_identifier(
         &mut self,
         qualified_identifier: &'ast QualifiedIdentifier,
-        _namespace: Namespace,
+        _namespace: Option<Namespace>,
     ) {
         walk_qualified_identifier(self, qualified_identifier)
     }
@@ -100,6 +112,12 @@ pub trait Visitor<'ast>: Sized {
     }
 }
 
+pub fn walk_crate<'a>(visitor: &mut impl Visitor<'a>, krate: &'a Crate) {
+    for module in krate.modules.iter() {
+        visitor.visit_module(module);
+    }
+}
+
 pub fn walk_module<'a>(visitor: &mut impl Visitor<'a>, module: &'a Module) {
     for item in &module.items {
         visitor.visit_item(item);
@@ -123,7 +141,12 @@ pub fn walk_item<'a>(visitor: &mut impl Visitor<'a>, item: &'a Item) {
         ItemKind::Static(static_) => {
             visitor.visit_static(static_);
         }
-        ItemKind::Module(module_declaration) => todo!(),
+        ItemKind::Module(module_declaration) => {
+            visitor.visit_module_declaration(module_declaration);
+        }
+        ItemKind::Import(import) => {
+            visitor.visit_import(import);
+        }
     }
 }
 
@@ -139,7 +162,7 @@ pub fn walk_function_signature<'a>(
     visitor: &mut impl Visitor<'a>,
     signature: &'a FunctionSignature,
 ) {
-    visitor.visit_qualified_identifier(&signature.name, Namespace::Value);
+    visitor.visit_qualified_identifier(&signature.name, Some(Namespace::Value));
     visitor.visit_function_parameter_list(&signature.parameters);
 
     if let Some(ty) = &signature.return_type {
@@ -206,10 +229,18 @@ pub fn walk_static<'a>(visitor: &mut impl Visitor<'a>, static_: &'a Static) {
     visitor.visit_expression(&static_.initializer);
 }
 
+pub fn walk_module_declaration<'a>(visitor: &mut impl Visitor<'a>, module: &'a ModuleDeclaration) {
+    visitor.visit_identifier(&module.name);
+}
+
+pub fn walk_import<'a>(visitor: &mut impl Visitor<'a>, import: &'a Import) {
+    visitor.visit_qualified_identifier(&import.name, None);
+}
+
 pub fn walk_type<'a>(visitor: &mut impl Visitor<'a>, ty: &'a Type) {
     match &ty.kind {
         TypeKind::QualifiedIdentifier(qualified_identifier) => {
-            visitor.visit_qualified_identifier(qualified_identifier, Namespace::Type)
+            visitor.visit_qualified_identifier(qualified_identifier, Some(Namespace::Type))
         }
         TypeKind::Pointer(ty) => visitor.visit_type(ty),
         TypeKind::Slice(ty) => visitor.visit_type(ty),
@@ -264,7 +295,7 @@ pub fn walk_expression<'a>(visitor: &mut impl Visitor<'a>, expression: &'a Expre
     match &expression.kind {
         ExpressionKind::Literal(literal) => visitor.visit_literal(literal),
         ExpressionKind::QualifiedIdentifier(qualified_identifier) => {
-            visitor.visit_qualified_identifier(qualified_identifier, Namespace::Value)
+            visitor.visit_qualified_identifier(qualified_identifier, Some(Namespace::Value))
         }
         ExpressionKind::This => {}
         ExpressionKind::Grouping(expression) => visitor.visit_expression(expression),
@@ -281,7 +312,7 @@ pub fn walk_expression<'a>(visitor: &mut impl Visitor<'a>, expression: &'a Expre
             }
         },
         ExpressionKind::Struct { name, fields } => {
-            visitor.visit_qualified_identifier(name, Namespace::Type);
+            visitor.visit_qualified_identifier(name, Some(Namespace::Type));
             fields
                 .iter()
                 .for_each(|e| visitor.visit_struct_initializer_field(e))
